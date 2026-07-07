@@ -47,11 +47,15 @@
   }
 
   /* ---- Rendering ---------------------------------------------------------- */
+  function syncViewportClass() {
+    document.body.classList.toggle("mobile-nav", window.innerWidth <= 1100);
+  }
   function renderNav() {
     const nav = document.getElementById("nav");
     nav.innerHTML = NAV.map(([id, label]) =>
       '<button class="nav-btn' + (id === current ? " active" : "") + '" data-nav="' + id + '">' + label + "</button>"
     ).join("");
+    syncViewportClass();
   }
   function mountPage() {
     pageEl = document.getElementById("page");
@@ -91,6 +95,9 @@
     updateHeader();
     window.scrollTo(0, 0);
   }
+
+  window.addEventListener("resize", syncViewportClass);
+  window.addEventListener("DOMContentLoaded", syncViewportClass);
 
   /* ---- Structural actions ------------------------------------------------- */
   function handleAction(action, el) {
