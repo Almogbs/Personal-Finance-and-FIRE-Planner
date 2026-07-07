@@ -1,0 +1,13 @@
+name = "personal-finance-and-fire-planner"
+main = "workers/plan-worker.js"
+compatibility_date = "2026-07-07"
+
+# If you use KV, fill in the namespace ID below.
+[[kv_namespaces]]
+binding = "PLANS"
+id = ""
+
+# If you want to set the Google client ID with Wrangler instead of the dashboard,
+# uncomment and fill this in, or keep it configured in the dashboard.
+# [vars]
+# GOOGLE_CLIENT_ID = "your-google-client-id.apps.googleusercontent.com"
