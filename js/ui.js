@@ -1065,7 +1065,7 @@
     mount(el) {
       el.innerHTML =
         "<h1>Save / Load (your DB)</h1>" +
-        '<p class="lead">State autosaves to this browser. Export a <code>.json</code> file to keep a portable snapshot, or load one back.</p>' +
+        '<p class="lead">State autosaves to this browser. Export a <code>.json</code> file to keep a portable snapshot, or load one back. You can also use Google sign-in with a Cloudflare Worker to store and retrieve your own plan.</p>' +
         '<div class="panel">' +
           "<h3>Plan name</h3>" +
           '<input id="data-name" data-path="meta.name" data-type="text" value="' + escapeHtml(S().meta.name) + '" style="width:100%;max-width:480px">' +
@@ -1078,6 +1078,28 @@
           "</div>" +
           '<p class="hint">Last saved: <span id="data-saved">' + S().meta.savedAt + "</span></p>" +
         "</div>" +
+        '<div class="panel">' +
+          '<h3>Cloud sync with Google + Cloudflare Worker</h3>' +
+          '<p class="hint">Set your worker URL and Google client ID once, then sign in to load or save your own plan JSON.</p>' +
+          '<div class="grid-2">' +
+            '<div class="control">' +
+              '<label for="cloud-worker-url">Cloudflare Worker URL</label>' +
+              '<input id="cloud-worker-url" type="text" style="width:100%" placeholder="https://your-worker.example.workers.dev">' +
+            '</div>' +
+            '<div class="control">' +
+              '<label for="cloud-google-client-id">Google OAuth Client ID</label>' +
+              '<input id="cloud-google-client-id" type="text" style="width:100%" placeholder="1234567890.apps.googleusercontent.com">' +
+            '</div>' +
+          '</div>' +
+          '<div class="toolbar" style="margin-top:12px">' +
+            '<button class="btn" data-action="cloud-sign-in">🔐 Sign in with Google</button>' +
+            '<button class="btn ghost" data-action="cloud-load">☁️ Load from cloud</button>' +
+            '<button class="btn" data-action="cloud-save">☁️ Save to cloud</button>' +
+            '<button class="btn ghost" data-action="cloud-sign-out">Sign out</button>' +
+          '</div>' +
+          '<div id="google-signin"></div>' +
+          '<p id="cloud-status" class="hint">Configure your Google Client ID and Cloudflare Worker URL to enable sync.</p>' +
+        '</div>' +
         '<div class="panel"><h3>Raw state (read-only)</h3><textarea id="data-raw" rows="18" readonly></textarea></div>';
       this.update(el);
     },

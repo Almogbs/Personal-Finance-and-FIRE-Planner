@@ -8,6 +8,169 @@
   "use strict";
   const FIRE = (window.FIRE = window.FIRE || {});
   const state = FIRE.state;
+  FIRE.auth = FIRE.auth || { user: null, idToken: "", status: "Not signed in" };
+  FIRE.cloudConfig = FIRE.cloudConfig || {};
+
+  function escapeHtml(value) {
+    return String(value == null ? "" : value).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+  function getCloudConfig() {
+    const defaults = FIRE.cloudConfig || {};
+    try {
+      const stored = JSON.parse(localStorage.getItem("fire-planner-cloud-config") || "null");
+      return {
+        googleClientId: defaults.googleClientId || (stored && stored.googleClientId) || "",
+        cloudApiBaseUrl: defaults.cloudApiBaseUrl || (stored && stored.cloudApiBaseUrl) || "",
+      };
+    } catch (e) {
+      return { googleClientId: defaults.googleClientId || "", cloudApiBaseUrl: defaults.cloudApiBaseUrl || "" };
+    }
+  }
+  function saveCloudConfig(next) {
+    const cfg = Object.assign(getCloudConfig(), next || {});
+    FIRE.cloudConfig = cfg;
+    try { localStorage.setItem("fire-planner-cloud-config", JSON.stringify(cfg)); } catch (e) {}
+    return cfg;
+  }
+  function setCloudConfig(key, value) {
+    const cfg = saveCloudConfig({ [key === "googleClientId" ? "googleClientId" : "cloudApiBaseUrl"]: value || "" });
+    if (key === "googleClientId") initGoogleAuth();
+    updateCloudUi();
+    return cfg;
+  }
+  function setCloudStatus(msg, cls) {
+    const el = document.getElementById("cloud-status");
+    if (!el) return;
+    el.className = "hint" + (cls ? " " + cls : "");
+    el.innerHTML = msg;
+  }
+  function decodeJwtPayload(token) {
+    try {
+      const parts = token.split(".");
+      if (parts.length < 2) return null;
+      const payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+      return JSON.parse(atob(payload));
+    } catch (e) {
+      return null;
+    }
+  }
+  function updateCloudUi() {
+    const cfg = getCloudConfig();
+    const workerInput = document.getElementById("cloud-worker-url");
+    if (workerInput && workerInput.value !== cfg.cloudApiBaseUrl) workerInput.value = cfg.cloudApiBaseUrl;
+    const clientInput = document.getElementById("cloud-google-client-id");
+    if (clientInput && clientInput.value !== cfg.googleClientId) clientInput.value = cfg.googleClientId;
+    const btnHost = document.getElementById("google-signin");
+    if (!btnHost) return;
+    if (!cfg.googleClientId) {
+      btnHost.innerHTML = '<p class="hint">Add a Google Client ID to enable sign-in.</p>';
+      setCloudStatus("Configure your Google Client ID and Cloudflare Worker URL to enable sync.", "");
+      return;
+    }
+    if (FIRE.auth && FIRE.auth.user) {
+      setCloudStatus('Signed in as <b>' + escapeHtml(FIRE.auth.user.email || FIRE.auth.user.name || "Google user") + '</b> — ready to sync.', "ok");
+    } else {
+      setCloudStatus("Sign in with Google to load or save your plan from the cloud.", "");
+    }
+  }
+  async function requestCloud(method, path, body) {
+    const cfg = getCloudConfig();
+    const baseUrl = (cfg.cloudApiBaseUrl || "").replace(/\/$/, "");
+    if (!baseUrl) throw new Error("Set your Cloudflare Worker URL first.");
+    const headers = { Accept: "application/json" };
+    if (FIRE.auth && FIRE.auth.idToken) headers.Authorization = "Bearer " + FIRE.auth.idToken;
+    const init = { method, headers };
+    if (body != null) { headers["Content-Type"] = "application/json"; init.body = JSON.stringify(body); }
+    const res = await fetch(baseUrl + path, init);
+    const text = await res.text();
+    let data = null;
+    if (text) {
+      try { data = JSON.parse(text); } catch (e) { data = text; }
+    }
+    if (!res.ok) {
+      const msg = data && (data.error || data.message) ? data.error || data.message : "Cloud request failed";
+      throw new Error(msg);
+    }
+    return data;
+  }
+  async function loadPlanFromCloud() {
+    if (!FIRE.auth || !FIRE.auth.idToken) {
+      setCloudStatus("Sign in with Google before loading your saved plan.", "bad");
+      return;
+    }
+    try {
+      setCloudStatus("Loading your plan from the cloud…", "");
+      const data = await requestCloud("GET", "/plan");
+      if (!data || !data.plan) throw new Error("The worker returned no plan.");
+      state.importJSON(JSON.stringify(data.plan));
+      remountPage();
+      setCloudStatus("✓ Loaded your cloud-saved plan.", "ok");
+    } catch (e) {
+      setCloudStatus("✕ " + e.message, "bad");
+    }
+  }
+  async function savePlanToCloud() {
+    if (!FIRE.auth || !FIRE.auth.idToken) {
+      setCloudStatus("Sign in with Google before saving your plan.", "bad");
+      return;
+    }
+    try {
+      setCloudStatus("Saving your plan to the cloud…", "");
+      await requestCloud("PUT", "/plan", { plan: state.get() });
+      setCloudStatus("✓ Saved your plan to the cloud.", "ok");
+    } catch (e) {
+      setCloudStatus("✕ " + e.message, "bad");
+    }
+  }
+  function promptGoogleLogin() {
+    const cfg = getCloudConfig();
+    if (!cfg.googleClientId) {
+      setCloudStatus("Add your Google Client ID first.", "bad");
+      return;
+    }
+    if (window.google && window.google.accounts && window.google.accounts.id) {
+      window.google.accounts.id.prompt((notification) => {
+        if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
+          setCloudStatus("Google sign-in was not shown. Try again or use the button.", "bad");
+        }
+      });
+    } else {
+      setCloudStatus("Google sign-in is still loading. Please wait a moment.", "bad");
+    }
+  }
+  function signOutFromCloud() {
+    FIRE.auth.user = null; FIRE.auth.idToken = ""; FIRE.auth.status = "Signed out";
+    updateCloudUi();
+  }
+  function initGoogleAuth() {
+    const cfg = getCloudConfig();
+    const host = document.getElementById("google-signin");
+    if (!cfg.googleClientId) {
+      if (host) host.innerHTML = '<p class="hint">Add a Google Client ID and Cloudflare Worker URL to enable sign-in.</p>';
+      updateCloudUi();
+      return;
+    }
+    if (!window.google || !window.google.accounts || !window.google.accounts.id) {
+      if (host) host.innerHTML = '<p class="hint">Loading Google sign-in…</p>';
+      window.addEventListener("load", initGoogleAuth, { once: true });
+      return;
+    }
+    window.google.accounts.id.initialize({
+      client_id: cfg.googleClientId,
+      callback: (response) => {
+        FIRE.auth.idToken = response.credential;
+        FIRE.auth.user = decodeJwtPayload(response.credential);
+        FIRE.auth.status = "Signed in";
+        updateCloudUi();
+      },
+      auto_select: false,
+    });
+    if (host) {
+      host.innerHTML = "";
+      window.google.accounts.id.renderButton(host, { theme: "outline", size: "large", text: "signin_with" });
+    }
+    updateCloudUi();
+  }
 
   const NAV = [
     ["dashboard", "📊 Dashboard"],
@@ -191,6 +354,10 @@
       case "fetch-fx": fetchFx(); break;
       case "fetch-date": fetchDate(); break;
       case "fetch-prices": fetchPrices(); break;
+      case "cloud-sign-in": promptGoogleLogin(); break;
+      case "cloud-sign-out": signOutFromCloud(); break;
+      case "cloud-load": loadPlanFromCloud(); break;
+      case "cloud-save": savePlanToCloud(); break;
     }
   }
 
@@ -292,6 +459,8 @@
   /* ---- Delegated events --------------------------------------------------- */
   function onInput(e) {
     const el = e.target;
+    if (el.id === "cloud-worker-url") { setCloudConfig("cloudApiBaseUrl", el.value); return; }
+    if (el.id === "cloud-google-client-id") { setCloudConfig("googleClientId", el.value); return; }
     // Expense-tracker cell (month × category).
     if (el.dataset && el.dataset.trkm) {
       const st = state.get();
@@ -395,6 +564,8 @@
     renderNav();
     mountPage();
     updateHeader();
+    updateCloudUi();
+    initGoogleAuth();
 
     const app = document.getElementById("app");
     app.addEventListener("input", onInput);
