@@ -97,8 +97,14 @@ h3 { margin: 0 0 12px; font-size: 16px; }
 @media (max-width: 900px) {
   .grid-2 { grid-template-columns: 1fr; }
   .shell { flex-direction: column; }
-  nav#nav { width: 100%; border-right: 0; border-bottom: 1px solid var(--line); padding: 10px 12px; flex-direction: row; flex-wrap: wrap; gap: 6px; }
-  .nav-btn { width: auto; flex: 0 0 auto; font-size: 14px; padding: 9px 10px; }
+  nav#nav {
+    width: 100%; border-right: 0; border-bottom: 1px solid var(--line); padding: 10px 12px;
+    flex-direction: row; flex-wrap: nowrap; gap: 6px; overflow-x: auto; overflow-y: hidden;
+    -webkit-overflow-scrolling: touch; scrollbar-width: thin; position: sticky; top: 0; z-index: 40;
+  }
+  nav#nav::-webkit-scrollbar { height: 4px; }
+  nav#nav::-webkit-scrollbar-thumb { background: rgba(0,0,0,.2); border-radius: 999px; }
+  .nav-btn { width: auto; flex: 0 0 auto; font-size: 14px; padding: 9px 10px; white-space: nowrap; }
   main#page { padding: 18px 14px 24px; }
 }
 @media (max-width: 700px) {
