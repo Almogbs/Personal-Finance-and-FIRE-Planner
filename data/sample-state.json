@@ -1,0 +1,303 @@
+{
+  "meta": {
+    "schema": 1,
+    "name": "Sample FIRE Plan",
+    "savedAt": "2026-07-07T13:33:51.797Z",
+    "note": "Educational model only — not financial advice.",
+    "theme": "light"
+  },
+  "live": {
+    "stockApiKey": "",
+    "corsProxy": "https://api.allorigins.win/raw?url="
+  },
+  "whatif": {
+    "sourceId": "",
+    "sellPct": 100,
+    "sourceGrowth": null,
+    "targetId": "",
+    "targetGrowth": null,
+    "years": 20,
+    "afterTax": true,
+    "customSource": {
+      "kind": "stock",
+      "name": "Custom source",
+      "value": 200000,
+      "costBasis": 100000,
+      "capGainsRate": 25,
+      "growth": 7,
+      "currency": "USD",
+      "sharePrice": 100,
+      "vestedShares": 500,
+      "grantBasisUsd": 40,
+      "ordinaryTaxRate": 47
+    },
+    "customTarget": {
+      "kind": "stock",
+      "name": "Custom target",
+      "growth": 8,
+      "capGainsRate": 25
+    }
+  },
+  "tracker": {
+    "months": []
+  },
+  "predictions": {
+    "baselineSavedAt": null,
+    "accounts": [],
+    "years": [],
+    "actuals": {}
+  },
+  "profile": {
+    "birthDate": "",
+    "dateOverride": "",
+    "currentAge": 30,
+    "fireAge": 45,
+    "endAge": 80,
+    "pensionAccessAge": 60
+  },
+  "market": {
+    "usdIls": 3.5
+  },
+  "assumptions": {
+    "inflation": 2.5,
+    "realMode": false,
+    "showMinFireAge": false,
+    "defaultReturns": {
+      "cash": 0,
+      "money_market": 3.5,
+      "taxable": 7,
+      "study_fund": 6,
+      "pension": 6,
+      "rsu": 8,
+      "custom": 5
+    },
+    "pensionAnnuityCoefficient": 220,
+    "swr": 4,
+    "pensionMode": "annuity",
+    "pensionEntitlingCeiling": 9430,
+    "pensionExemptionPct": 52,
+    "pensionCpiLinked": true,
+    "pensionFeeDeposit": 1,
+    "pensionFeeBalance": 0.15,
+    "studyFundFeeBalance": 0.5,
+    "payroll": {
+      "creditPointValue": 242,
+      "niReducedRate": 3.5,
+      "niFullRate": 12,
+      "niThresholdMonthly": 7522,
+      "niCeilingMonthly": 49030,
+      "pensionEmployeePct": 6,
+      "pensionEmployerPct": 6.5,
+      "severancePct": 8.33,
+      "pensionCeilingMonthly": 0,
+      "khEmployeePct": 2.5,
+      "khEmployerPct": 7.5,
+      "khCeilingMonthly": 0
+    }
+  },
+  "income": {
+    "salaryMode": "gross",
+    "grossMonthly": 30000,
+    "taxableExtrasMonthly": 0,
+    "taxableImputationsMonthly": 0,
+    "creditPoints": 2.25,
+    "monthlyNetSalary": 18000,
+    "salaryGrowthPct": 2,
+    "stopSalaryAtFire": true,
+    "allocations": [],
+    "defaultAccountId": "acc-t1ajoe8",
+    "grants": [
+      {
+        "id": "grant-nimyads",
+        "name": "Company RSU",
+        "symbol": "",
+        "currency": "USD",
+        "sharePrice": 150,
+        "expectedGrowthPct": 8,
+        "vestedShares": 100,
+        "sharesPerYear": 100,
+        "grantBasisUsd": 80,
+        "ordinaryTaxRate": 47,
+        "capGainsRate": 25,
+        "startAge": 30,
+        "stopAge": 45
+      }
+    ],
+    "extra": []
+  },
+  "spending": {
+    "growthPct": 2,
+    "fireMonthly": 12000,
+    "useCategoriesInRetirement": true,
+    "categories": [
+      {
+        "id": "cat-9dcbqej",
+        "name": "Housing",
+        "freq": "monthly",
+        "monthly": 4000,
+        "startAge": 0,
+        "endAge": 80,
+        "growthPct": 2,
+        "inflate": true
+      },
+      {
+        "id": "cat-615drxb",
+        "name": "Food & groceries",
+        "freq": "monthly",
+        "monthly": 2000,
+        "startAge": 0,
+        "endAge": 80,
+        "growthPct": 2,
+        "inflate": true
+      },
+      {
+        "id": "cat-zseymqe",
+        "name": "Transport",
+        "freq": "monthly",
+        "monthly": 1000,
+        "startAge": 0,
+        "endAge": 80,
+        "growthPct": 2,
+        "inflate": true
+      },
+      {
+        "id": "cat-jbfa708",
+        "name": "Utilities & bills",
+        "freq": "monthly",
+        "monthly": 700,
+        "startAge": 0,
+        "endAge": 80,
+        "growthPct": 2,
+        "inflate": true
+      },
+      {
+        "id": "cat-wy23tgs",
+        "name": "Insurance & health",
+        "freq": "monthly",
+        "monthly": 600,
+        "startAge": 0,
+        "endAge": 80,
+        "growthPct": 2,
+        "inflate": true
+      },
+      {
+        "id": "cat-0r3ohuu",
+        "name": "Leisure & misc",
+        "freq": "monthly",
+        "monthly": 1500,
+        "startAge": 0,
+        "endAge": 80,
+        "growthPct": 2,
+        "inflate": true
+      },
+      {
+        "id": "cat-wd9bwdy",
+        "name": "Annual (vacations, etc.)",
+        "freq": "yearly",
+        "monthly": 20000,
+        "startAge": 0,
+        "endAge": 80,
+        "growthPct": 2,
+        "inflate": true
+      }
+    ],
+    "steps": []
+  },
+  "accounts": [
+    {
+      "id": "acc-6f0ylto",
+      "name": "Checking",
+      "group": "Bank",
+      "kind": "cash",
+      "currency": "ILS",
+      "balance": 20000,
+      "expectedReturn": 0,
+      "monthlyContribution": 0,
+      "contributionGrowthPct": 0,
+      "liquid": true,
+      "includeInFire": true,
+      "costBasis": 20000,
+      "capGainsRate": 0,
+      "accessAge": 0,
+      "feeDeposit": 0,
+      "feeBalance": 0,
+      "notes": ""
+    },
+    {
+      "id": "acc-cd7u2mh",
+      "name": "Savings / money market",
+      "group": "Bank",
+      "kind": "money_market",
+      "currency": "ILS",
+      "balance": 80000,
+      "expectedReturn": 3.5,
+      "monthlyContribution": 0,
+      "contributionGrowthPct": 0,
+      "liquid": true,
+      "includeInFire": true,
+      "costBasis": 80000,
+      "capGainsRate": 25,
+      "accessAge": 0,
+      "feeDeposit": 0,
+      "feeBalance": 0,
+      "notes": ""
+    },
+    {
+      "id": "acc-6l4dvgc",
+      "name": "Keren Hishtalmut",
+      "group": "Study fund",
+      "kind": "study_fund",
+      "currency": "ILS",
+      "balance": 40000,
+      "expectedReturn": 6,
+      "monthlyContribution": 0,
+      "contributionGrowthPct": 1,
+      "liquid": true,
+      "includeInFire": true,
+      "costBasis": 40000,
+      "capGainsRate": 0,
+      "accessAge": 0,
+      "feeDeposit": 0,
+      "feeBalance": 0.5,
+      "notes": ""
+    },
+    {
+      "id": "acc-t1ajoe8",
+      "name": "Brokerage (S&P 500 ETF)",
+      "group": "Brokerage",
+      "kind": "taxable",
+      "currency": "ILS",
+      "balance": 120000,
+      "expectedReturn": 7,
+      "monthlyContribution": 0,
+      "contributionGrowthPct": 0,
+      "liquid": true,
+      "includeInFire": true,
+      "costBasis": 100000,
+      "capGainsRate": 25,
+      "accessAge": 0,
+      "feeDeposit": 0,
+      "feeBalance": 0,
+      "notes": ""
+    },
+    {
+      "id": "acc-rd1xi9u",
+      "name": "Pension",
+      "group": "Pension",
+      "kind": "pension",
+      "currency": "ILS",
+      "balance": 150000,
+      "expectedReturn": 6,
+      "monthlyContribution": 0,
+      "contributionGrowthPct": 1,
+      "liquid": false,
+      "includeInFire": true,
+      "costBasis": 150000,
+      "capGainsRate": 0,
+      "accessAge": 60,
+      "feeDeposit": 1,
+      "feeBalance": 0.15,
+      "notes": ""
+    }
+  ]
+}
