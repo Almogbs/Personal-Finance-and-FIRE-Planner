@@ -144,22 +144,17 @@ function getCloudConfig() {
       setCloudStatus("✕ " + e.message, "bad");
     }
   }
-  function promptGoogleLogin() {
-    const cfg = getCloudConfig();
-    if (!cfg.googleClientId) {
-      setCloudStatus("Add your Google Client ID first.", "bad");
-      return;
-    }
-    if (window.google && window.google.accounts && window.google.accounts.id) {
-      window.google.accounts.id.prompt((notification) => {
-        if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
-          setCloudStatus("Google sign-in was not shown. Try again or use the button.", "bad");
-        }
-      });
-    } else {
-      setCloudStatus("Google sign-in is still loading. Please wait a moment.", "bad");
-    }
+function promptGoogleLogin() {
+  const host = document.getElementById("google-signin");
+
+  if (!host) {
+    setCloudStatus("Google sign-in button is unavailable.", "bad");
+    return;
   }
+
+  host.scrollIntoView({ behavior: "smooth", block: "center" });
+  setCloudStatus("Use the Google button above to sign in.", "");
+}
   function signOutFromCloud() {
     FIRE.auth.user = null; FIRE.auth.idToken = ""; FIRE.auth.status = "Signed out";
     updateCloudUi();
