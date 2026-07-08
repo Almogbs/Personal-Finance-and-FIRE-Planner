@@ -1083,7 +1083,6 @@ mount(el) {
       '<p class="hint">Google sign-in configuration is loaded automatically from the server.</p>' +
       '<p id="cloud-config-status" class="hint">Loading configuration...</p>' +
       '<div class="toolbar" style="margin-top:12px">' +
-        '<button class="btn" data-action="cloud-sign-in">🔐 Sign in with Google</button>' +
         '<button class="btn ghost" data-action="cloud-load">☁️ Load from cloud</button>' +
         '<button class="btn" data-action="cloud-save">☁️ Save to cloud</button>' +
         '<button class="btn ghost" data-action="cloud-sign-out">Sign out</button>' +
