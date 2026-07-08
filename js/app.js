@@ -14,18 +14,40 @@
   function escapeHtml(value) {
     return String(value == null ? "" : value).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
-  function getCloudConfig() {
-    const defaults = FIRE.cloudConfig || {};
-    try {
-      const stored = JSON.parse(localStorage.getItem("fire-planner-cloud-config") || "null");
-      return {
-        googleClientId: defaults.googleClientId || (stored && stored.googleClientId) || "",
-        cloudApiBaseUrl: defaults.cloudApiBaseUrl || (stored && stored.cloudApiBaseUrl) || "",
-      };
-    } catch (e) {
-      return { googleClientId: defaults.googleClientId || "", cloudApiBaseUrl: defaults.cloudApiBaseUrl || "" };
+function getCloudConfig() {
+  return FIRE.cloudConfig || {
+    googleClientId: "",
+    cloudApiBaseUrl: ""
+  };
+}
+
+  async function loadCloudConfig() {
+  try {
+    const res = await fetch("/config");
+    if (!res.ok) throw new Error("Failed to load cloud config");
+
+    const cfg = await res.json();
+
+    FIRE.cloudConfig = {
+      googleClientId: cfg.googleClientId || "",
+      cloudApiBaseUrl: cfg.workerUrl || ""
+    };
+
+    const status = document.getElementById("cloud-config-status");
+    if (status) {
+      status.textContent = "Cloud configuration loaded.";
+    }
+
+  } catch (e) {
+    console.error("Cloud config error:", e);
+
+    const status = document.getElementById("cloud-config-status");
+    if (status) {
+      status.textContent = "Unable to load cloud configuration.";
     }
   }
+}
+  
   function saveCloudConfig(next) {
     const cfg = Object.assign(getCloudConfig(), next || {});
     FIRE.cloudConfig = cfg;
@@ -64,7 +86,7 @@
     if (!btnHost) return;
     if (!cfg.googleClientId) {
       btnHost.innerHTML = '<p class="hint">Add a Google Client ID to enable sign-in.</p>';
-      setCloudStatus("Configure your Google Client ID and Cloudflare Worker URL to enable sync.", "");
+      setCloudStatus("Loading cloud configuration...", "");
       return;
     }
     if (FIRE.auth && FIRE.auth.user) {
@@ -146,7 +168,7 @@
     const cfg = getCloudConfig();
     const host = document.getElementById("google-signin");
     if (!cfg.googleClientId) {
-      if (host) host.innerHTML = '<p class="hint">Add a Google Client ID and Cloudflare Worker URL to enable sign-in.</p>';
+      if (host) host.innerHTML = '<p class="hint">Loading Google sign-in configuration...</p>';
       updateCloudUi();
       return;
     }
@@ -558,12 +580,13 @@
   }
 
   /* ---- Boot --------------------------------------------------------------- */
-  function init() {
+  async function init() {
     state.load();
     applyTheme();
     renderNav();
     mountPage();
     updateHeader();
+    await loadCloudConfig();
     updateCloudUi();
     initGoogleAuth();
 
