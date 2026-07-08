@@ -186,6 +186,11 @@ function promptGoogleLogin() {
       host.innerHTML = "";
       window.google.accounts.id.renderButton(host, { theme: "outline", size: "large", text: "signin_with" });
     }
+    if (!host) {
+  console.log("Google sign-in container not mounted yet");
+  return;
+}
+    
     updateCloudUi();
   }
 
@@ -237,11 +242,15 @@ function promptGoogleLogin() {
     ).join("");
     syncViewportClass();
   }
-  function mountPage() {
-    pageEl = document.getElementById("page");
-    const page = FIRE.ui.pages[current];
-    page.mount(pageEl);
+function mountPage() {
+  pageEl = document.getElementById("page");
+  const page = FIRE.ui.pages[current];
+  page.mount(pageEl);
+
+  if (current === "data") {
+    initGoogleAuth();
   }
+}
   function updatePage() {
     const page = FIRE.ui.pages[current];
     if (page && page.update && pageEl) page.update(pageEl);
