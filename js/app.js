@@ -23,7 +23,7 @@ function getCloudConfig() {
 
   async function loadCloudConfig() {
   try {
-    const res = await fetch("/config");
+    const res = await fetch("https://quiet-salad-4bc4.almogbs1.workers.dev/config");
     if (!res.ok) throw new Error("Failed to load cloud config");
 
     const cfg = await res.json();
