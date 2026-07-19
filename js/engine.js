@@ -112,7 +112,7 @@
   function spendSourceAt(state, age) {
     const sp = state.spending;
     if (sp.steps && sp.steps.length && sp.steps.some((s) => age >= s.fromAge)) return "step";
-    if (age >= state.profile.fireAge && !sp.useCategoriesInRetirement) return "headline";
+    if (age >= state.profile.fireAge && sp.useHeadlineSpending) return "headline";
     return "categories";
   }
 
@@ -132,7 +132,7 @@
     }
 
     const retired = age >= state.profile.fireAge;
-    if (retired && !sp.useCategoriesInRetirement) {
+    if (retired && sp.useHeadlineSpending) {
       const yrs = age - state.profile.fireAge;
       return sp.fireMonthly * Math.pow(1 + infl, yrs);
     }
@@ -185,7 +185,8 @@
     // rate so drawdown withdrawals can be taxed on the gain portion.
     const accs = state.accounts.map((a) => {
       const bal = toILS(a, usdIls);
-      const basis = a.currency === "USD" ? (a.costBasis != null ? a.costBasis : a.balance) * usdIls : (a.costBasis != null ? a.costBasis : a.balance);
+      const basisOwn = FIRE.state.costBasisOf(a);
+      const basis = a.currency === "USD" ? basisOwn * usdIls : basisOwn;
       return {
         id: a.id, name: a.name, kind: a.kind, group: a.group || a.kind, ret: a.expectedReturn || 0,
         contrib: a.monthlyContribution || 0, contribGrowth: a.contributionGrowthPct || 0,
@@ -306,7 +307,7 @@
       if (working) {
         grantAccs.forEach(({ acc, grant }) => {
           const start = grant.startAge != null ? grant.startAge : A0;
-          const stop = grant.stopAge != null ? grant.stopAge : fireAge;
+          const stop = grant.vestUntilRetire ? fireAge : (grant.stopAge != null ? grant.stopAge : fireAge);
           if (age >= start && age < stop) deposit(acc, grantVestNetAtYear(grant, usdIls, k) * yf);
         });
       }
@@ -367,12 +368,17 @@
         distributeSurplus(net);
       } else {
         let needNet = -net;
-        for (const kind of WITHDRAW_PRIORITY) {
+        const drawOrder = (state.assumptions.withdrawalOrder && state.assumptions.withdrawalOrder.length)
+          ? state.assumptions.withdrawalOrder
+          : WITHDRAW_PRIORITY;
+        for (const kind of drawOrder) {
           if (needNet <= 1e-6) break;
           for (const a of accs) {
             if (needNet <= 1e-6) break;
             if (a.kind !== kind) continue;
             if (a.bal <= 0) continue;
+            // Money earmarked as NOT part of FIRE is never spent down in retirement.
+            if (!a.includeInFire) continue;
             if (a.kind === "pension") {
               if (pcfg.mode === "annuity") continue; // annuitized: not drawable
               const access = a.accessAge || state.profile.pensionAccessAge;
@@ -499,7 +505,8 @@
     state.accounts.forEach((a) => {
       const value = toILS(a, usdIls);
       if (value <= 0) return;
-      const basis = a.currency === "USD" ? (a.costBasis != null ? a.costBasis : a.balance) * usdIls : (a.costBasis != null ? a.costBasis : a.balance);
+      const basisOwn = FIRE.state.costBasisOf(a);
+      const basis = a.currency === "USD" ? basisOwn * usdIls : basisOwn;
       const gain = Math.max(0, value - basis);
       const taxNow = gain * (a.capGainsRate || 0) / 100;
       out.push({ id: a.id, name: a.name, kind: a.kind, value: value, net: value - taxNow, taxNow: taxNow, basis: Math.min(basis, value), cg: a.capGainsRate || 0, growth: a.expectedReturn || 0 });

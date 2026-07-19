@@ -156,7 +156,19 @@ function promptGoogleLogin() {
   setCloudStatus("Use the Google button above to sign in.", "");
 }
   function signOutFromCloud() {
+    const email = FIRE.auth && FIRE.auth.user ? FIRE.auth.user.email : null;
     FIRE.auth.user = null; FIRE.auth.idToken = ""; FIRE.auth.status = "Signed out";
+    try {
+      if (window.google && window.google.accounts && window.google.accounts.id) {
+        // Stop Google from silently re-selecting the same account next time.
+        window.google.accounts.id.disableAutoSelect();
+        // Revoke the previous grant so the account chooser is shown again
+        // (fixes being "stuck" on an old/irrelevant Google account).
+        if (email) window.google.accounts.id.revoke(email, () => {});
+      }
+    } catch (e) { /* GIS not loaded — nothing to clear */ }
+    // Re-render a fresh sign-in button.
+    initGoogleAuth();
     updateCloudUi();
   }
   function initGoogleAuth() {
@@ -182,6 +194,9 @@ function promptGoogleLogin() {
       },
       auto_select: false,
     });
+    // Never silently reuse a previously chosen account — the user must pick,
+    // so the button can't get "stuck" on an old/irrelevant Google account.
+    try { window.google.accounts.id.disableAutoSelect(); } catch (e) {}
     if (host) {
       host.innerHTML = "";
       window.google.accounts.id.renderButton(host, { theme: "outline", size: "large", text: "signin_with" });
@@ -196,14 +211,15 @@ function promptGoogleLogin() {
 
   const NAV = [
     ["dashboard", "📊 Dashboard"],
-    ["accounts", "🏦 Accounts"],
     ["assumptions", "⚙️ Market & Assumptions"],
     ["income", "💰 Income"],
     ["spending", "🛒 Spending"],
-    ["tracker", "🧾 Tracker"],
+    ["accounts", "🏦 Accounts"],
     ["pension", "👵 Pension"],
+    ["tracker", "🧾 Tracker"],
     ["projections", "📈 Projections"],
     ["predictions", "🎯 Predictions"],
+    ["fire", "🔥 FIRE"],
     ["whatif", "🔀 What-if / Switch"],
     ["data", "💾 Save / Load"],
   ];
@@ -269,7 +285,6 @@ function mountPage() {
     if (badge) {
       badge.innerHTML =
         '<span class="hdr-metric">Net worth <b>' + FIRE.ui.money(snap.total) + "</b></span>" +
-        '<span class="hdr-metric">FIRE target <b>' + FIRE.ui.money(p.targets.target) + "</b></span>" +
         '<span class="hdr-metric">' + (p.survives ? '<span class="ok">✓ survives to 80</span>' : '<span class="bad">✕ depletes @ ' + p.depletionAge + "</span>") + "</span>";
     }
     const nameEl = document.getElementById("header-name");
@@ -348,6 +363,34 @@ function mountPage() {
         if (!isNaN(age)) { st.profile.fireAge = age; state.update(() => {}); remountPage(); }
         break;
       }
+      case "find-earliest": {
+        const e = FIRE.engine.earliestFireAge(st);
+        const out = document.getElementById(el.dataset.target || "earliest-out");
+        if (out) {
+          if (e.found) {
+            const same = e.age === Math.round(st.profile.fireAge);
+            out.innerHTML = '<div class="callout"><b>Earliest retirement age: ' + e.age + "</b> " +
+              (e.yearsAway <= 0 ? "(you could retire now 🎉)" : "(" + e.yearsAway + " year" + (e.yearsAway === 1 ? "" : "s") + " away)") +
+              " — earliest age at which the plan survives to " + st.profile.endAge + " using your real spending." +
+              (same ? " Already set." : ' <button class="btn small" data-action="set-fire-age" data-age="' + e.age + '">Set retirement age to ' + e.age + "</button>") +
+              "</div>";
+          } else {
+            out.innerHTML = '<div class="callout"><span class="bad">No retirement age up to ' + st.profile.endAge + " survives</span> at current spending & assumptions.</div>";
+          }
+        }
+        break;
+      }
+      case "wd-up":
+      case "wd-down": {
+        const kind = el.dataset.kind;
+        const ord = st.assumptions.withdrawalOrder || [];
+        const i = ord.indexOf(kind);
+        if (i < 0) break;
+        const j = action === "wd-up" ? i - 1 : i + 1;
+        if (j < 0 || j >= ord.length) break;
+        const tmp = ord[i]; ord[i] = ord[j]; ord[j] = tmp;
+        state.update(() => {}); remountPage(); break;
+      }
       case "save-file": state.download(sanitizeName(st.meta.name) + ".json"); break;
       case "load-file": document.getElementById("data-file").click(); break;
       case "load-sample": loadSample(); break;
@@ -359,16 +402,35 @@ function mountPage() {
         const inp = document.getElementById("trk-month");
         let ym = inp && inp.value ? inp.value : new Date().toISOString().slice(0, 7);
         st.tracker.months = st.tracker.months || [];
-        if (!st.tracker.months.some((m) => m.ym === ym)) {
-          st.tracker.months.push({ id: state.uid("mo"), ym: ym, entries: {}, note: "" });
-          state.update(() => {}); remountPage();
-        }
+        let m = st.tracker.months.find((x) => x.ym === ym);
+        if (!m) { m = { id: state.uid("mo"), ym: ym, entries: {}, note: "" }; st.tracker.months.push(m); }
+        FIRE.ui.pages.tracker.selMonthId = m.id;
+        state.update(() => {}); remountPage();
         break;
       }
       case "del-month": {
+        if (FIRE.ui.pages.tracker.selMonthId === el.dataset.id) FIRE.ui.pages.tracker.selMonthId = null;
         st.tracker.months = (st.tracker.months || []).filter((m) => m.id !== el.dataset.id);
         state.update(() => {}); remountPage(); break;
       }
+      case "add-year": {
+        const inp = document.getElementById("trk-year");
+        const yr = inp && inp.value ? parseInt(inp.value, 10) : FIRE.state.refDate(st).getFullYear();
+        if (isNaN(yr)) break;
+        st.tracker.years = st.tracker.years || [];
+        let y = st.tracker.years.find((x) => x.year === yr);
+        if (!y) { y = { id: state.uid("yr"), year: yr, entries: {}, note: "" }; st.tracker.years.push(y); }
+        FIRE.ui.pages.tracker.selYearId = y.id;
+        state.update(() => {}); remountPage();
+        break;
+      }
+      case "del-year": {
+        if (FIRE.ui.pages.tracker.selYearId === el.dataset.id) FIRE.ui.pages.tracker.selYearId = null;
+        st.tracker.years = (st.tracker.years || []).filter((y) => y.id !== el.dataset.id);
+        state.update(() => {}); remountPage(); break;
+      }
+      case "trk-month-sel": FIRE.ui.pages.tracker.selMonthId = el.dataset.id; remountPage(); break;
+      case "trk-year-sel": FIRE.ui.pages.tracker.selYearId = el.dataset.id; remountPage(); break;
       case "save-baseline": savePredictionBaseline(); break;
       case "record-actual": recordActualYear(); break;
       case "del-actual": {
@@ -457,20 +519,18 @@ function mountPage() {
   async function fetchPrices() {
     if (!FIRE.live) return;
     const st = state.get();
-    const key = (st.live && st.live.stockApiKey) || "";
     const proxy = (st.live && st.live.corsProxy) || "";
     const grants = (st.income.grants || []).filter((g) => (g.symbol || "").trim());
     if (!grants.length) { setStatus("grants-status", "add a Symbol (e.g. AMZN) to a grant first", "bad"); return; }
     setStatus("grants-status", "fetching " + grants.length + "…");
     let ok = 0; const errs = [];
     for (const g of grants) {
-      try { const q = await FIRE.live.fetchQuote(g.symbol, { apiKey: key, corsProxy: proxy }); g.sharePrice = Math.round(q.price * 100) / 100; ok++; }
+      try { const q = await FIRE.live.fetchQuote(g.symbol, { corsProxy: proxy }); g.sharePrice = Math.round(q.price * 100) / 100; ok++; }
       catch (e) { errs.push(g.symbol + ": " + e.message); }
     }
     state.update(() => {});
     remountPage();
-    const link = ' <a href="https://finnhub.io/register" target="_blank" rel="noopener">get a free key</a>';
-    setStatus("grants-status", (ok ? "✓ updated " + ok : "✕ none updated") + (errs.length ? " · " + errs.join(" · ") + (key ? "" : link) : ""), errs.length ? "bad" : "ok");
+    setStatus("grants-status", (ok ? "✓ updated " + ok : "✕ none updated") + (errs.length ? " · " + errs.join(" · ") : ""), errs.length ? "bad" : "ok");
   }
 
   function sanitizeName(n) { return String(n || "fire-plan").replace(/[^a-z0-9\-_]+/gi, "-").toLowerCase(); }
@@ -494,6 +554,13 @@ function mountPage() {
       if (m) { m.entries = m.entries || {}; m.entries[el.dataset.trkc] = coerce(el, "float"); state.update(() => {}); updatePage(); }
       return;
     }
+    // Expense-tracker yearly cell (year × category).
+    if (el.dataset && el.dataset.trky) {
+      const st = state.get();
+      const y = (st.tracker.years || []).find((x) => x.id === el.dataset.trky);
+      if (y) { y.entries = y.entries || {}; y.entries[el.dataset.trkyc] = coerce(el, "float"); state.update(() => {}); updatePage(); }
+      return;
+    }
     if (el.dataset && el.dataset.path) {
       const st = state.get();
       setPath(st, el.dataset.path, coerce(el, el.dataset.type));
@@ -511,7 +578,7 @@ function mountPage() {
       if (item) {
         item[el.dataset.field] = coerce(el, el.dataset.type);
         state.update(() => {});
-        updatePage();
+        if (el.dataset.remount) remountPage(); else updatePage();
       }
       return;
     }
@@ -601,8 +668,6 @@ function mountPage() {
     document.addEventListener("change", (e) => { if (e.target && e.target.id === "data-file") onFile(e); });
 
     // Header quick buttons
-    document.getElementById("btn-save").addEventListener("click", () => state.download(sanitizeName(state.get().meta.name) + ".json"));
-    document.getElementById("btn-load").addEventListener("click", () => { current = "data"; go("data"); });
     const themeBtn = document.getElementById("btn-theme");
     if (themeBtn) themeBtn.addEventListener("click", () => handleAction("toggle-theme", themeBtn));
   }

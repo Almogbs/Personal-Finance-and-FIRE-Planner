@@ -4,11 +4,12 @@ A **standalone, offline, interactive** personal-finance app for Israel. Several 
 
 1. **💸 Budget / expense manager** — categories (monthly or yearly), growth, life-stage step-changes, totals.
 2. **📊 Portfolio & allocation manager** — every account (cash, money market, brokerage, study fund,
-   pension, equity grants) in ILS or USD, with allocation pies by account and by type.
+   pension, equity grants) in ILS or USD, with allocation pies by account, by type, and a brokerage
+   breakdown (including cost basis vs unrealized gains).
 3. **🧾 Salary & tax** — enter **gross** salary and it computes net take-home plus your pension and
    Keren Hishtalmut deposits via Israeli payroll rules (or enter net directly).
 4. **👵 Pension** — Israeli קצבה modeling with tax exemption, management fees, and drawdown.
-5. **🔥 FIRE / retirement projection** — year-by-year net worth to age 80, earliest-FIRE age, survival.
+5. **🔥 FIRE / retirement projection** — year-by-year net worth to age 80, earliest retirement age, survival.
 
 Open `index.html` in any modern browser — no server, no build step, no external dependencies, no data
 leaves your machine.
@@ -48,12 +49,13 @@ Everything else — including **Save to file** and **Load from file** — works 
 - **Fully interactive** — sliders + number inputs for every parameter; the whole plan recalculates live.
 - **Dark mode** — one-click theme toggle, saved with your plan.
 - **Multi-page UI**, one page per purpose:
-  - **📊 Dashboard** — headline metrics, net-worth-to-80 chart, allocation doughnut, liquid-vs-pension, FIRE target coverage.
-  - **🏦 Accounts** — every pot of money as **individually-controllable cards grouped** by category; edit balance / return prediction / contributions / notes; **add or remove** pensions, brokerage accounts, cash, study funds, RSU/equity, or custom accounts. RSU shows as a computed card so nothing is double-counted.
-  - **⚙️ Market & Assumptions** — USD/ILS, AMZN price, inflation, safe withdrawal rate, per-type expected returns, ages, pension annuity coefficient, real/nominal toggle, plus a returns-sensitivity chart.
+  - **📊 Dashboard** — headline metrics, net-worth-to-80 chart, allocation doughnut, liquid-vs-pension, and a real-spending **retirement readiness** panel.
+  - **🏦 Accounts** — every pot of money as **individually-controllable cards grouped** by category; edit balance / return prediction / contributions / cap-gains / notes; set a per-holding **gain vs buy value %** on brokerage accounts so capital-gains tax applies to gains only; **add or remove** pensions, brokerage accounts, cash, study funds, RSU/equity, or custom accounts. RSU shows as a computed card so nothing is double-counted.
+  - **⚙️ Market & Assumptions** — USD/ILS, inflation, per-type expected returns, ages, pension annuity coefficient, real/nominal toggle, and a configurable **retirement withdrawal order**.
   - **💰 Income** — salary + growth, full RSU (Section-102 capital-gains) modeling, arbitrary extra income streams, and **surplus allocation rules** (route savings to chosen accounts by % or ₪/month, rest to a default).
   - **🛒 Spending** — break spending into **categories** (each with its own growth and age window) and set **step-changes** at specific ages (differential spending). Pie + projection chart.
-  - **📈 Projections** — **year-by-year table of every entity to age 80**, stacked chart of all accounts over time, income-vs-spending, CSV export.
+  - **🔥 FIRE** — theoretical target maths: fixed monthly spend, safe withdrawal rate, portfolio target at SWR / 4% / 3.5% / 3%, coverage, earliest retirement age, and a returns-sensitivity chart. Projections use your real spending unless you opt into the fixed spend here.
+  - **📈 Projections** — **year-by-year table of every entity to age 80**, stacked chart of all accounts over time, income-vs-spending, an **income & withdrawals by phase** timeline, CSV export.
   - **💾 Save / Load** — export/import your plan as a `.json` file (your "database"); autosaves to browser `localStorage`.
 - **Differential income & spending** — e.g. salary +1%/yr while spending +2%/yr; or "from age 31, monthly spend jumps to ₪13,000".
 - **Charts** — line, bar, stacked bar, and pie/doughnut, all rendered with a tiny built-in canvas library (zero dependencies) with hover tooltips.
@@ -102,7 +104,6 @@ See **[docs/MODEL.md](docs/MODEL.md)** for the calculation details and **[docs/U
 - Multiple named scenarios side-by-side (baseline vs aggressive vs conservative).
 - Monte-Carlo / historical-sequence simulation instead of a single fixed return.
 - FX drift for USD accounts (currently constant USD/ILS across the projection).
-- Tax-aware withdrawals (capital-gains tax on taxable-account drawdowns).
 - Per-scenario notes and a printable one-page summary.
 
 Contributions welcome — it's a single-folder static app, easy to hack on.

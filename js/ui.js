@@ -83,8 +83,10 @@
         "</div>" +
         '<div class="grid-2">' +
           '<div class="panel"><h3>Liquid vs pension over time</h3><canvas id="dash-lp" height="260"></canvas></div>' +
-          '<div class="panel"><h3>FIRE target coverage</h3>' +
-            '<div style="margin-bottom:10px">' + toggle("Auto-calculate earliest possible FIRE age", "assumptions.showMinFireAge") + "</div>" +
+          '<div class="panel"><h3>Retirement readiness</h3>' +
+            '<div class="toolbar"><button class="btn small" data-action="find-earliest" data-target="dash-earliest">🔎 Find earliest retirement age</button></div>' +
+            '<div id="dash-earliest"></div>' +
+            '<div style="margin-bottom:10px">' + toggle("Auto-calculate earliest possible retirement age", "assumptions.showMinFireAge") + "</div>" +
             '<div id="dash-minfire"></div>' +
             '<div id="dash-fire"></div></div>' +
         "</div>";
@@ -102,13 +104,33 @@
         card("Current net worth", money(snap.total), "incl. pension & vested RSU") +
         card("Liquid (excl. pension)", money(snap.nonPension), "spendable before 60") +
         card("Pension", money(snap.pension), "locked until " + st.profile.pensionAccessAge) +
-        card("FIRE target @ " + p.targets.swr + "%", money(p.targets.target), "portfolio needed for ₪" + Math.round(st.spending.fireMonthly).toLocaleString() + "/mo") +
-        card("Plan status", p.survives ? '<span class="ok">Survives to 80</span>' : '<span class="bad">Depletes @ ' + p.depletionAge + "</span>", "at FIRE age " + st.profile.fireAge) +
+        (function () {
+          const faR = Math.round(st.profile.fireAge);
+          const spMo = FIRE.engine.monthlySpend(st, faR);
+          return card("Retirement spend @ " + st.profile.fireAge, money(spMo) + "/mo", "your real modeled spend at that age");
+        })() +
+        card("Plan status", p.survives ? '<span class="ok">Survives to 80</span>' : '<span class="bad">Depletes @ ' + p.depletionAge + "</span>", "at retirement age " + st.profile.fireAge) +
         (function () {
           const yrs = p.endAge - p.A0;
           const nom = p.endNetWorth, rl = nom / Math.pow(1 + st.assumptions.inflation / 100, yrs);
           return card("Net worth @ 80", money(real ? rl : nom),
             real ? ("nominal " + money(nom)) : ("≈ " + money(rl) + " in today's ₪"));
+        })() +
+        card("Years to retirement", String(Math.max(0, Math.round(st.profile.fireAge) - p.A0)), "from age " + p.A0 + " to " + Math.round(st.profile.fireAge)) +
+        (function () {
+          const r0 = p.rows[0]; const inc = r0.salary + r0.extra;
+          const sr = inc > 0 ? ((inc - r0.spend) / inc) * 100 : 0;
+          return card("Savings rate (now)", (sr > 0 ? sr.toFixed(0) : "0") + "%", "of current take-home income");
+        })() +
+        (function () {
+          const fr = p.fireRow; const nom = fr ? fr.total : 0;
+          const rl = fr ? nom / Math.pow(1 + st.assumptions.inflation / 100, fr.k) : 0;
+          return card("Net worth @ retirement", money(real ? rl : nom), "age " + Math.round(st.profile.fireAge) + (real ? " (today's ₪)" : ""));
+        })() +
+        (function () {
+          const fr = p.fireRow; const spYr = FIRE.engine.monthlySpend(st, Math.round(st.profile.fireAge)) * 12;
+          const wr = fr && fr.nonPension > 0 ? (spYr / fr.nonPension) * 100 : 0;
+          return card("Withdrawal rate @ retirement", wr > 0 ? wr.toFixed(1) + "%" : "–", "real spend ÷ non-pension assets");
         })();
 
       // Net worth line
@@ -139,20 +161,23 @@
         ],
       });
 
-      // FIRE coverage
+      // Retirement readiness — based on your REAL projected spending, not a
+      // theoretical SWR target (that lives on the FIRE tab).
       const fireRow = p.fireRow;
-      const cov = fireRow ? (fireRow.nonPension / p.targets.target) * 100 : 0;
+      const faR = Math.round(st.profile.fireAge);
+      const spMo = FIRE.engine.monthlySpend(st, faR);
+      const spYr = spMo * 12;
+      const nonPen = fireRow ? fireRow.nonPension : 0;
+      const runway = spYr > 0 ? nonPen / spYr : 0;
       el.querySelector("#dash-fire").innerHTML =
-        '<p>At FIRE age <b>' + st.profile.fireAge + "</b>, projected non-pension assets are <b>" + money(fireRow ? fireRow.nonPension : 0) + "</b>.</p>" +
-        '<div class="bar-track"><div class="bar-fill ' + (cov >= 100 ? "ok" : "warn") + '" style="width:' + Math.min(100, cov) + '%"></div></div>' +
-        "<p>That is <b>" + cov.toFixed(0) + "%</b> of the ₪" + Math.round(p.targets.target).toLocaleString() + " target (" + p.targets.swr + "% rule).</p>" +
-        '<table class="mini"><tr><th>Rule</th><th>Target</th></tr>' +
-        "<tr><td>4.0%</td><td>" + money(p.targets.target4) + "</td></tr>" +
-        "<tr><td>3.5%</td><td>" + money(p.targets.target35) + "</td></tr>" +
-        "<tr><td>3.0%</td><td>" + money(p.targets.target3) + "</td></tr></table>" +
-        "<p>Pension at " + p.pension.accessAge + ": gross <b>" + money(p.pension.grossMonthly) + "/mo</b>, net after tax <b>" + money(p.pension.netMonthly) + "/mo</b> (≈ " + money(p.pension.netMonthlyReal) + "/mo in today's ₪). See the Pension page for the breakdown.</p>";
+        "<p>At retirement age <b>" + st.profile.fireAge + "</b>, projected non-pension assets are <b>" + money(nonPen) + "</b>.</p>" +
+        "<p>Your modeled spending that year is <b>" + money(spMo) + "/mo</b> (" + money(spYr) + "/yr) — from your real categories &amp; steps.</p>" +
+        "<p>That pot alone covers ≈ <b>" + runway.toFixed(0) + "×</b> your first retirement year (before further growth &amp; pension).</p>" +
+        '<div class="callout">' + (p.survives ? '<span class="ok">✓ Plan survives to ' + st.profile.endAge + "</span>" : '<span class="bad">✕ Depletes at age ' + p.depletionAge + "</span>") + " at retirement age " + st.profile.fireAge + ", using your real spending.</div>" +
+        "<p>Pension at " + p.pension.accessAge + ": gross <b>" + money(p.pension.grossMonthly) + "/mo</b>, net after tax <b>" + money(p.pension.netMonthly) + "/mo</b> (≈ " + money(p.pension.netMonthlyReal) + "/mo in today's ₪). See the Pension page for the breakdown.</p>" +
+        '<p class="hint">The theoretical SWR portfolio target (fixed spend ÷ SWR) lives on the <b>🔥 FIRE</b> tab.</p>';
 
-      // Optional: earliest survivable FIRE age.
+      // Optional: earliest survivable retirement age.
       const mf = el.querySelector("#dash-minfire");
       if (mf) {
         if (st.assumptions.showMinFireAge) {
@@ -160,13 +185,13 @@
           if (e.found) {
             const isNow = e.yearsAway <= 0;
             mf.innerHTML =
-              '<div class="callout"><b>Earliest possible FIRE age: ' + e.age + "</b> " +
+              '<div class="callout"><b>Earliest possible retirement age: ' + e.age + "</b> " +
               (isNow ? "(you could retire now 🎉)" : "(" + e.yearsAway + " year" + (e.yearsAway === 1 ? "" : "s") + " from now)") +
               " — earliest age at which the plan survives to " + st.profile.endAge + " at current spending & assumptions." +
-              (e.age !== Math.round(st.profile.fireAge) ? ' <button class="btn small" data-action="set-fire-age" data-age="' + e.age + '">Set FIRE age to ' + e.age + "</button>" : "") +
+              (e.age !== Math.round(st.profile.fireAge) ? ' <button class="btn small" data-action="set-fire-age" data-age="' + e.age + '">Set retirement age to ' + e.age + "</button>" : "") +
               "</div>";
           } else {
-            mf.innerHTML = '<div class="callout"><span class="bad">No FIRE age up to ' + st.profile.endAge + " survives</span> with current spending & assumptions. Lower spending, raise returns/income, or extend the horizon.</div>";
+            mf.innerHTML = '<div class="callout"><span class="bad">No retirement age up to ' + st.profile.endAge + " survives</span> with current spending & assumptions. Lower spending, raise returns/income, or extend the horizon.</div>";
           }
         } else {
           mf.innerHTML = "";
@@ -230,6 +255,10 @@
         '<div class="grid-2">' +
           '<div class="panel"><h3>Allocation by account</h3><canvas id="acc-pie" height="280"></canvas></div>' +
           '<div class="panel"><h3>Allocation by type</h3><canvas id="acc-kind" height="280"></canvas></div>' +
+        "</div>" +
+        '<div class="grid-2">' +
+          '<div class="panel"><h3>Brokerage accounts</h3><canvas id="acc-brokerage" height="280"></canvas><p class="hint" id="acc-brokerage-empty"></p></div>' +
+          '<div class="panel"><h3>Brokerage: cost basis vs gains</h3><canvas id="acc-brokerage-gain" height="280"></canvas><p class="hint" id="acc-brokerage-gain-empty"></p></div>' +
         "</div>";
       this.update(el);
     },
@@ -244,6 +273,18 @@
       const curSel = '<select data-arr="accounts" data-id="' + a.id + '" data-field="currency" data-type="text">' +
         ["ILS", "USD"].map((c) => "<option" + (a.currency === c ? " selected" : "") + ">" + c + "</option>").join("") + "</select>";
       const chk = (field, label, on) => '<label class="acc-chk"><input type="checkbox" data-arr="accounts" data-id="' + a.id + '" data-field="' + field + '" data-type="bool"' + (on ? " checked" : "") + "> " + label + "</label>";
+      // Taxable holdings: show the buying value implied by the gain% and the
+      // gain that capital-gains tax will apply to (losses => no CG tax).
+      let cgHint = "";
+      if (a.kind === "taxable") {
+        const cur = a.currency;
+        const basisOwn = FIRE.state.costBasisOf(a);
+        const gain = (a.balance || 0) - basisOwn;
+        const taxGain = Math.max(0, gain);
+        cgHint = '<p class="hint">Buy value ≈ ' + money(basisOwn, cur) + " · " +
+          (gain >= 0 ? "gain " : "loss ") + money(Math.abs(gain), cur) +
+          " · CG tax on " + money(taxGain, cur) + " @ " + (a.capGainsRate || 0) + "%.</p>";
+      }
       return (
         '<div class="acc-card">' +
           '<div class="acc-head">' +
@@ -259,28 +300,80 @@
             A("monthlyContribution", "Monthly contribution", a.monthlyContribution, 50) +
             A("contributionGrowthPct", "Contrib growth %/yr", a.contributionGrowthPct, 0.1) +
             A("accessAge", "Access age", a.accessAge, 1, { type: "int" }) +
-            A("capGainsRate", "Cap-gains % (info)", a.capGainsRate, 1) +
+            A("capGainsRate", "Cap-gains %", a.capGainsRate, 1) +
+            (a.kind === "taxable" ? A("gainPct", "Gain vs buy value %", a.gainPct == null ? 0 : a.gainPct, 1) : "") +
             (a.kind === "pension" ? A("feeDeposit", "Mgmt fee — deposit %", a.feeDeposit, 0.01) : "") +
             (a.kind === "pension" || a.kind === "study_fund" ? A("feeBalance", "Mgmt fee — balance %/yr", a.feeBalance, 0.01) : "") +
             '<label class="acc-f"><span>Group</span><input data-arr="accounts" data-id="' + a.id + '" data-field="group" data-type="text" value="' + escapeHtml(a.group || "") + '"></label>' +
           "</div>" +
           '<div class="acc-flags">' + chk("liquid", "Liquid", a.liquid) + chk("includeInFire", "Count in FIRE", a.includeInFire) + "</div>" +
+          cgHint +
           '<input class="acc-notes" data-arr="accounts" data-id="' + a.id + '" data-field="notes" data-type="text" placeholder="Notes…" value="' + escapeHtml(a.notes || "") + '">' +
         "</div>"
       );
     },
     update(el) {
-      const snap = FIRE.engine.snapshot(S());
+      const st = S();
+      const snap = FIRE.engine.snapshot(st);
       C.pie(el.querySelector("#acc-pie"), { slices: snap.accounts.map((a) => ({ name: a.name, value: a.valueILS })) });
       const byKind = {};
       snap.accounts.forEach((a) => (byKind[a.kind] = (byKind[a.kind] || 0) + a.valueILS));
       C.pie(el.querySelector("#acc-kind"), { doughnut: true, slices: Object.keys(byKind).map((k) => ({ name: kindLabel(k), value: byKind[k] })) });
+
+      // Brokerage-only breakdown: value per taxable account, and the split of
+      // total brokerage value into invested cost basis vs. taxable gains.
+      const usdIls = st.market.usdIls;
+      const taxable = st.accounts.filter((a) => a.kind === "taxable");
+      const brokCanvas = el.querySelector("#acc-brokerage");
+      const brokEmpty = el.querySelector("#acc-brokerage-empty");
+      const gainCanvas = el.querySelector("#acc-brokerage-gain");
+      const gainEmpty = el.querySelector("#acc-brokerage-gain-empty");
+      const brokSlices = taxable
+        .map((a) => ({ name: a.name, value: a.currency === "USD" ? a.balance * usdIls : (a.balance || 0) }))
+        .filter((s) => s.value > 0);
+      if (brokSlices.length) {
+        if (brokEmpty) brokEmpty.textContent = "";
+        C.pie(brokCanvas, { doughnut: true, slices: brokSlices });
+        let basisTot = 0, gainTot = 0;
+        taxable.forEach((a) => {
+          const fx = a.currency === "USD" ? usdIls : 1;
+          const val = (a.balance || 0) * fx;
+          const basis = FIRE.state.costBasisOf(a) * fx;
+          basisTot += Math.min(basis, val);
+          gainTot += Math.max(0, val - basis);
+        });
+        C.pie(gainCanvas, { doughnut: true, slices: [
+          { name: "Cost basis (invested)", value: basisTot, color: "#4e79a7" },
+          { name: "Taxable gains", value: gainTot, color: "#59a14f" },
+        ] });
+        if (gainEmpty) gainEmpty.textContent = gainTot > 0
+          ? "Capital-gains tax applies only to the green slice when you sell."
+          : "No unrealized gains — no capital-gains tax on a sale right now.";
+      } else {
+        if (brokCanvas) brokCanvas.getContext("2d").clearRect(0, 0, brokCanvas.width, brokCanvas.height);
+        if (gainCanvas) gainCanvas.getContext("2d").clearRect(0, 0, gainCanvas.width, gainCanvas.height);
+        if (brokEmpty) brokEmpty.textContent = "No brokerage (taxable) accounts yet. Add one above to see the breakdown.";
+        if (gainEmpty) gainEmpty.textContent = "";
+      }
     },
   };
 
   /* ==================== MARKET & ASSUMPTIONS ============================= */
   const assumptions = {
     mount(el) {
+      const wdOrder = (S().assumptions.withdrawalOrder || []);
+      const wdHtml =
+        '<div class="panel"><h3>Withdrawal order in retirement</h3>' +
+          '<p class="hint">When spending exceeds income in retirement, your accounts are drained in this order — the top is spent first. Drag priority with the arrows. <b>Pension</b> is only ever tapped after its access age (or when not annuitized), and accounts you un-tick from <b>“Count in FIRE”</b> on the Accounts page are never drawn down.</p>' +
+          '<ol class="wd-order">' +
+            wdOrder.map((k, i) =>
+              '<li><span class="wd-kind">' + kindLabel(k) + "</span>" +
+                '<span class="wd-btns">' +
+                  '<button class="btn small" data-action="wd-up" data-kind="' + k + '"' + (i === 0 ? " disabled" : "") + ' title="Move up">↑</button>' +
+                  '<button class="btn small" data-action="wd-down" data-kind="' + k + '"' + (i === wdOrder.length - 1 ? " disabled" : "") + ' title="Move down">↓</button>' +
+                "</span></li>").join("") +
+          "</ol>" +
+        "</div>";
       el.innerHTML =
         "<h1>Market & Assumptions</h1>" +
         '<p class="lead">Global levers. Drag the sliders — the whole plan recalculates instantly.</p>' +
@@ -297,7 +390,9 @@
             '<button class="btn small" data-action="fetch-date">↻ From internet</button></div>' +
             '<span id="date-status" class="hint"></span></div>' +
           '<div class="callout" id="age-out"></div>' +
-          ctl("FIRE age", "profile.fireAge", { min: 30, max: 70, step: 1, type: "int" }) +
+          ctl("Retirement age", "profile.fireAge", { min: 30, max: 70, step: 1, type: "int" }) +
+          '<div class="toolbar"><button class="btn small" data-action="find-earliest" data-target="asm-earliest">🔎 Find earliest retirement age</button></div>' +
+          '<div id="asm-earliest"></div>' +
           ctl("Pension access age", "profile.pensionAccessAge", { min: 55, max: 70, step: 1, type: "int" }) +
           ctl("Projection end age", "profile.endAge", { min: 70, max: 100, step: 1, type: "int" }) +
         "</div>" +
@@ -305,9 +400,9 @@
         '<div class="grid-2">' +
         '<div class="panel"><h3>Economy</h3>' +
           ctl("Inflation (annual)", "assumptions.inflation", { min: 0, max: 10, step: 0.1, suffix: "%" }) +
-          ctl("Safe withdrawal rate", "assumptions.swr", { min: 2, max: 6, step: 0.1, suffix: "%" }) +
           ctl("Pension annuity coefficient", "assumptions.pensionAnnuityCoefficient", { min: 150, max: 260, step: 1, type: "int" }) +
           '<div style="margin-top:10px">' + toggle("Show values in real (today's ₪) terms", "assumptions.realMode") + "</div>" +
+          '<p class="hint">The safe withdrawal rate now lives on the <b>🔥 FIRE</b> tab.</p>' +
         "</div>" +
         '<div class="panel"><h3>Default expected returns by type (%)</h3>' +
           ctl("Cash", "assumptions.defaultReturns.cash", { min: 0, max: 10, step: 0.1, suffix: "%" }) +
@@ -338,7 +433,7 @@
           "</div></div>" +
           '<p class="hint">Used when salary is entered as <b>gross</b> on the Income page. Public 2026 references: credit point ≈ ₪242/mo; NI+health ≈ 3.5% up to ~₪7,522/mo then ≈ 12% to ~₪49,030; pension 6%+6.5%+6%; Keren Hishtalmut 2.5%+7.5% (ceiling ₪15,712). Verify with your payslip.</p>' +
         "</div>" +
-        '<div class="panel"><h3>Sensitivity: years to FIRE target vs return</h3><canvas id="asm-sens" height="240"></canvas></div>';
+        wdHtml;
       this.update(el);
     },
     update(el) {
@@ -355,22 +450,6 @@
           ageOut.innerHTML = "No birth date set — using current age <b>" + st.profile.currentAge + "</b>. Add a date of birth above to derive it.";
         }
       }
-      // Simple sensitivity: for a range of taxable returns, re-project and find
-      // the first working age where non-pension >= target.
-      const base = FIRE.state.clone(st);
-      const returns = [2, 3, 4, 5, 6, 7, 8, 9, 10];
-      const years = returns.map((r) => {
-        const t = FIRE.state.clone(base);
-        t.accounts.forEach((a) => { if (a.kind === "taxable" || a.kind === "money_market") a.expectedReturn = r; });
-        (t.income.grants || []).forEach((g) => { g.expectedGrowthPct = r + 1; });
-        const p = FIRE.engine.project(t);
-        const hit = p.rows.find((row) => row.nonPension >= p.targets.target);
-        return hit ? hit.age - p.A0 : null;
-      });
-      C.bar(el.querySelector("#asm-sens"), {
-        labels: returns.map((r) => r + "%"),
-        series: [{ name: "Years to target", data: years.map((y) => (y == null ? 0 : y)), color: "#f28e2b" }],
-      });
     },
   };
 
@@ -400,7 +479,7 @@
               ctl("Keren Hishtalmut — employer pays", "assumptions.payroll.khEmployerPct", { min: 0, max: 10, step: 0.1, suffix: "%" })
             : ctl("Monthly net salary", "income.monthlyNetSalary", { min: 0, max: 80000, step: 100 })) +
           ctl("Salary growth / year", "income.salaryGrowthPct", { min: 0, max: 10, step: 0.1, suffix: "%" }) +
-          '<div style="margin-top:10px">' + toggle("Stop salary at FIRE age", "income.stopSalaryAtFire") + "</div>" +
+          '<div style="margin-top:10px">' + toggle("Stop salary at retirement age", "income.stopSalaryAtFire") + "</div>" +
           '<div id="income-pay-out" class="callout"></div>' +
           '<p class="hint">In <b>gross</b> mode, net take-home, income tax, national insurance/health, and the <b>pension & Keren Hishtalmut deposits</b> are computed from gross via Israeli payroll rules (edit rates on Market & Assumptions). In <b>net</b> mode you enter take-home and set deposits per account. Estimate only — not payroll advice.</p>' +
         "</div>" +
@@ -414,12 +493,11 @@
           '<p class="hint">Zero, one, or many grants — e.g. RSUs from different companies. Each has its own share price, growth, vesting, basis, tax rates, and a vesting window (<b>start</b>–<b>stop</b> age) so you can start, stop, or drop grants. No RSU? Just remove them all. Modeled on the Israeli Section-102 capital-gains track.</p>' +
           '<div class="toolbar"><button class="btn small" data-action="add-grant">+ Add grant</button>' +
             '<button class="btn small" data-action="fetch-prices">↻ Fetch live prices</button>' +
-            '<input data-path="live.stockApiKey" data-type="text" placeholder="Finnhub API key (optional)" style="width:210px">' +
             '<input data-path="live.corsProxy" data-type="text" placeholder="CORS proxy URL (optional)" style="width:210px">' +
             '<span id="grants-status" class="hint"></span></div>' +
           '<div class="table-wrap"><table class="grid"><thead><tr><th>Name</th><th>Symbol</th><th>Cur</th><th>Price</th><th>Growth %</th><th>Vested sh.</th><th>Sh./yr</th><th>Basis</th><th>Ord. tax %</th><th>CG %</th><th>Vest from</th><th>Vest until</th><th></th></tr></thead><tbody id="income-grants"></tbody></table></div>' +
           '<div id="income-rsu-out" class="callout"></div>' +
-          '<p class="hint">Live prices fetch by <b>Symbol</b> (e.g. AMZN, GOOG). It tries keyless Yahoo first; browsers usually block that (CORS), so either add a free <a href="https://finnhub.io/register" target="_blank" rel="noopener">Finnhub key</a> or a CORS-proxy URL prefix (e.g. <code>https://api.allorigins.win/raw?url=</code>). Only runs on click; keys are stored in your local plan.</p>' +
+          '<p class="hint">Live prices fetch by <b>Symbol</b> (e.g. AMZN, GOOG) from <b>Yahoo Finance</b> — <b>no API key needed</b>. Browsers block Yahoo directly (CORS), so it goes through a public CORS proxy; the default usually works, or set another proxy URL prefix (e.g. <code>https://corsproxy.io/?</code>). Only runs on click; nothing but the ticker is sent.</p>' +
         "</div>" +
         '<div class="panel"><h3>Surplus allocation — where your savings go</h3>' +
           '<p class="hint">Each year, income minus spending is your surplus. Route parts of it to specific accounts (a % of surplus, or a fixed ₪/month); whatever is left lands in your default account.</p>' +
@@ -453,7 +531,12 @@
           "<td>" + f("ordinaryTaxRate", g.ordinaryTaxRate, 1) + "</td>" +
           "<td>" + f("capGainsRate", g.capGainsRate, 1) + "</td>" +
           "<td>" + f("startAge", g.startAge, 1, "int") + "</td>" +
-          "<td>" + f("stopAge", g.stopAge, 1, "int") + "</td>" +
+          "<td>" +
+            (g.vestUntilRetire
+              ? '<span class="hint" title="Tied to your retirement age">= ' + Math.round(st.profile.fireAge) + "</span>"
+              : f("stopAge", g.stopAge, 1, "int")) +
+            '<label class="acc-chk" style="margin-top:4px" title="Tie vest-until to your retirement age; updates automatically when you change it"><input type="checkbox" data-arr="income.grants" data-id="' + g.id + '" data-field="vestUntilRetire" data-type="bool" data-remount="1"' + (g.vestUntilRetire ? " checked" : "") + "> ret age</label>" +
+          "</td>" +
           '<td><button class="btn danger small" data-action="del-grant" data-id="' + g.id + '">✕</button></td>' +
           "</tr>";
       }).join("") || '<tr><td colspan="13" style="text-align:center;color:var(--muted)">No grants — click “+ Add grant” if you have RSUs/options.</td></tr>';
@@ -522,7 +605,7 @@
       const gv = FIRE.state.grantsVested(st);
       const out = el.querySelector("#income-rsu-out");
       if (out) out.innerHTML = gv.per.length
-        ? "Total vested equity: <b>" + money(gv.gross) + "</b> gross · tax <b>" + money(gv.tax) + "</b> · net <b>" + money(gv.net) + "</b> (eff. " + (gv.effectiveRate * 100).toFixed(1) + "%). Each grant appears as a computed account on the Accounts page; vesting stops at each grant's 'vest until' age or your FIRE age, whichever comes first."
+        ? "Total vested equity: <b>" + money(gv.gross) + "</b> gross · tax <b>" + money(gv.tax) + "</b> · net <b>" + money(gv.net) + "</b> (eff. " + (gv.effectiveRate * 100).toFixed(1) + "%). Each grant appears as a computed account on the Accounts page; vesting stops at each grant's 'vest until' age or your retirement age, whichever comes first."
         : "No equity grants configured.";
 
       // Live allocation preview against this year's surplus.
@@ -556,10 +639,9 @@
         "<h1>Spending</h1>" +
         '<p class="lead">Break spending into categories with their own growth, or set step-changes at specific ages.</p>' +
         '<div class="grid-2">' +
-        '<div class="panel"><h3>Headline</h3>' +
-          ctl("FIRE monthly spend (headline target)", "spending.fireMonthly", { min: 0, max: 60000, step: 250 }) +
+        '<div class="panel"><h3>Category defaults</h3>' +
           ctl("Default category growth / yr", "spending.growthPct", { min: 0, max: 10, step: 0.1, suffix: "%" }) +
-          '<div style="margin-top:10px">' + toggle("Use categories in retirement (else flat headline)", "spending.useCategoriesInRetirement") + "</div>" +
+          '<p class="hint">Projections use your <b>real</b> categories &amp; step-changes below. The theoretical fixed-spend FIRE target lives on the <b>🔥 FIRE</b> tab.</p>' +
         "</div>" +
         '<div class="panel"><h3>Spending mix (at current age)</h3><canvas id="sp-pie" height="240"></canvas></div>' +
         "</div>" +
@@ -627,65 +709,214 @@
         series: [{ name: "Annual spend", data: p.rows.map((r) => r.spend), color: "#e15759" }],
       });
 
-      // Preview: which rule decides spending at key ages.
+      // Preview: which rule decides spending across age ranges. Grouped into
+      // contiguous segments — and when a step is in force, segments break per
+      // individual step, so every step you defined shows as its own range.
       const prev = el.querySelector("#sp-preview");
       if (prev) {
-        const A0 = Math.round(st.profile.currentAge), fa = Math.round(st.profile.fireAge);
-        const stepAges = (st.spending.steps || []).map((s) => s.fromAge);
-        const ages = Array.from(new Set([A0, fa - 1, fa].concat(stepAges).concat([60, st.profile.endAge])))
-          .filter((a) => a >= A0 && a <= st.profile.endAge).sort((a, b) => a - b);
-        const label = { step: '<span class="bad">step override</span>', headline: "flat headline", categories: "categories" };
-        const rows = ages.map((a) => {
+        const A0 = Math.round(st.profile.currentAge), end = st.profile.endAge;
+        const label = { step: "step override", headline: "fixed FIRE spend", categories: "categories" };
+        const stepAt = (a) => (st.spending.steps || []).filter((s) => a >= s.fromAge).sort((x, y) => y.fromAge - x.fromAge)[0] || null;
+        const segs = [];
+        for (let a = A0; a <= end; a++) {
           const src = FIRE.engine.spendSourceAt(st, a);
-          return "<tr><td>" + a + "</td><td>" + money(FIRE.engine.monthlySpend(st, a)) + "/mo</td><td>" + label[src] + "</td></tr>";
+          const step = src === "step" ? stepAt(a) : null;
+          const key = src + "|" + (step ? step.id : "");
+          const last = segs[segs.length - 1];
+          if (last && last.key === key) last.a1 = a;
+          else segs.push({ key: key, src: src, step: step, a0: a, a1: a });
+        }
+        const rows = segs.map((sg) => {
+          const ageLbl = sg.a0 === sg.a1 ? "age " + sg.a0 : "ages " + sg.a0 + "–" + sg.a1;
+          const m0 = FIRE.engine.monthlySpend(st, sg.a0), m1 = FIRE.engine.monthlySpend(st, sg.a1);
+          const amt = sg.a0 === sg.a1 ? money(m0) + "/mo" : money(m0) + " → " + money(m1) + "/mo";
+          let decided = sg.src === "step"
+            ? '<span class="bad">step override</span>' + (sg.step ? " — from age " + sg.step.fromAge + (sg.step.note ? " (" + escapeHtml(sg.step.note) + ")" : "") : "")
+            : label[sg.src];
+          return "<tr><td>" + ageLbl + "</td><td>" + amt + "</td><td>" + decided + "</td></tr>";
         }).join("");
-        // If a step decides spending at the FIRE age, the retirement toggle is inert there.
-        const stepInRetire = FIRE.engine.spendSourceAt(st, fa) === "step";
         prev.innerHTML =
-          '<table class="grid"><thead><tr><th>Age</th><th>Monthly spend</th><th>Decided by</th></tr></thead><tbody>' + rows + "</tbody></table>" +
-          '<p class="hint">Priority: <b>step override</b> → (in retirement) <b>flat headline</b> if "use categories in retirement" is off → otherwise <b>categories</b>.' +
-          (stepInRetire ? ' <span class="bad">A step currently covers your retirement years, so the "use categories in retirement" toggle has no effect until you end/remove that step.</span>' : "") + "</p>";
+          '<table class="grid"><thead><tr><th>Ages</th><th>Monthly spend</th><th>Decided by</th></tr></thead><tbody>' + rows + "</tbody></table>" +
+          '<p class="hint">Priority: the <b>latest step</b> whose age you\'ve passed wins (each step persists until the next one) → in retirement, <b>fixed FIRE spend</b> if enabled on the <b>🔥 FIRE</b> tab → otherwise your <b>categories</b>.</p>';
       }
     },
   };
 
   /* ============================ TRACKER ================================= */
   const tracker = {
+    selMonthId: null,
+    selYearId: null,
     budgetFor(c) { return c.freq === "yearly" ? (c.monthly || 0) / 12 : (c.monthly || 0); },
+    monthlyCats(st) { return (st.spending.categories || []).filter((c) => c.freq !== "yearly"); },
+    yearlyCats(st) { return (st.spending.categories || []).filter((c) => c.freq === "yearly"); },
+
     mount(el) {
+      const st = S();
+      const months = st.tracker.months || [];
+      const years = st.tracker.years || [];
+      // Resolve/repair selections (default to the most recent entry).
+      if (this.selMonthId == null || !months.some((m) => m.id === this.selMonthId)) {
+        const latest = months.slice().sort((a, b) => b.ym.localeCompare(a.ym))[0];
+        this.selMonthId = latest ? latest.id : null;
+      }
+      if (this.selYearId == null || !years.some((y) => y.id === this.selYearId)) {
+        const latestY = years.slice().sort((a, b) => b.year - a.year)[0];
+        this.selYearId = latestY ? latestY.id : null;
+      }
+      const nowYm = new Date().toISOString().slice(0, 7);
+      const nowYear = FIRE.state.refDate(st).getFullYear();
       el.innerHTML =
         "<h1>Expense Tracker</h1>" +
-        '<p class="lead">Log what you actually spent each month and compare it to your budget (the category amounts from the Spending page). See which categories ran over or under. History is saved with your plan.</p>' +
-        '<div class="toolbar"><input type="month" id="trk-month"><button class="btn small" data-action="add-month">+ Add month</button></div>' +
-        '<div class="panel"><h3>Budget vs actual — total over time</h3><canvas id="trk-line" height="220"></canvas></div>' +
-        '<div id="trk-months"></div>';
-      this.renderMonths(el);
+        '<p class="lead">Compare what you actually spent against your budget (the category amounts from the Spending page). Click a <b>month</b> tile to log that month\'s recurring spending; log <b>one-off / annual</b> costs once per <b>year</b>. Totals refresh as you type; history is saved with your plan.</p>' +
+        '<div class="panel"><h3>Budget vs actual — monthly, over time</h3><canvas id="trk-line" height="220"></canvas></div>' +
+        '<div class="panel">' +
+          "<h3>Monthly tracking</h3>" +
+          '<div class="toolbar"><input type="month" id="trk-month" value="' + nowYm + '"><button class="btn small" data-action="add-month">+ Add / open month</button></div>' +
+          '<div id="trk-months-grid" class="pred-grid"></div>' +
+          '<div id="trk-month-detail"></div>' +
+        "</div>" +
+        '<div class="panel">' +
+          "<h3>Yearly tracking</h3>" +
+          '<p class="hint">One-off / annual costs (vacations, insurance, taxes) are recorded once per year — not tied to a specific month.</p>' +
+          '<div class="toolbar"><input type="number" id="trk-year" min="1990" max="2200" step="1" value="' + nowYear + '"><button class="btn small" data-action="add-year">+ Add / open year</button></div>' +
+          '<div id="trk-years-grid" class="pred-grid"></div>' +
+          '<div id="trk-year-detail"></div>' +
+          '<h4 style="margin:18px 0 8px">Budget vs actual — yearly, over time</h4>' +
+          '<canvas id="trk-year-line" height="220"></canvas>' +
+        "</div>";
+      this.renderMonthDetail(el);
+      this.renderYearDetail(el);
       this.update(el);
     },
-    renderMonths(el) {
+
+    renderMonthsGrid(el) {
+      const grid = el.querySelector("#trk-months-grid");
+      if (!grid) return;
       const st = S();
-      const cats = st.spending.categories || [];
+      const cats = this.monthlyCats(st);
+      const budget = cats.reduce((s, c) => s + this.budgetFor(c), 0);
+      const nowYm = new Date().toISOString().slice(0, 7);
       const months = (st.tracker.months || []).slice().sort((a, b) => b.ym.localeCompare(a.ym));
-      el.querySelector("#trk-months").innerHTML = months.map((m) => {
-        let bTot = 0, aTot = 0;
-        const rows = cats.map((c) => {
-          const bud = this.budgetFor(c);
-          const act = (m.entries && m.entries[c.id]) || 0;
-          const v = act - bud; bTot += bud; aTot += act;
-          return "<tr><td>" + escapeHtml(c.name) + "</td><td>" + money(bud) + "</td>" +
-            '<td><input class="num" data-trkm="' + m.id + '" data-trkc="' + c.id + '" data-type="float" type="number" step="10" value="' + act + '"></td>' +
-            '<td style="color:' + (v > 0 ? "var(--bad)" : "var(--ok)") + '">' + (v > 0 ? "+" : "") + money(v) + "</td></tr>";
-        }).join("");
-        const vt = aTot - bTot;
-        return '<div class="panel"><div class="acc-group-head"><h3>' + m.ym + '</h3><button class="btn danger small" data-action="del-month" data-id="' + m.id + '">✕</button></div>' +
-          '<div class="table-wrap"><table class="grid"><thead><tr><th>Category</th><th>Budget</th><th>Actual</th><th>Δ vs budget</th></tr></thead><tbody>' + rows +
-          '<tr class="fire-row"><td><b>Total</b></td><td>' + money(bTot) + "</td><td>" + money(aTot) + '</td><td style="color:' + (vt > 0 ? "var(--bad)" : "var(--ok)") + '"><b>' + (vt > 0 ? "+" : "") + money(vt) + "</b></td></tr>" +
-          "</tbody></table></div></div>";
-      }).join("") || '<p class="hint">No months yet — pick a month above and click “Add month”.</p>';
+      if (!months.length) { grid.innerHTML = '<p class="hint">No months yet — pick a month above and click “Add / open month”.</p>'; return; }
+      grid.innerHTML = months.map((m) => {
+        const act = cats.reduce((s, c) => s + ((m.entries && m.entries[c.id]) || 0), 0);
+        const d = act - budget;
+        return '<div class="pred-box' + (m.ym === nowYm ? " now" : "") + (act > 0 ? " has-actual" : "") + (m.id === this.selMonthId ? " sel" : "") + '" data-action="trk-month-sel" data-id="' + m.id + '">' +
+          '<div class="pred-year">' + m.ym + "</div>" +
+          '<div class="pred-total">' + C.fmt(act) + "</div>" +
+          (act > 0 ? '<div class="pred-delta ' + (d > 0 ? "bad" : "ok") + '">' + (d > 0 ? "+" : "") + C.fmt(d) + "</div>" : "") +
+          "</div>";
+      }).join("");
     },
+    renderYearsGrid(el) {
+      const grid = el.querySelector("#trk-years-grid");
+      if (!grid) return;
+      const st = S();
+      const cats = this.yearlyCats(st);
+      const budget = cats.reduce((s, c) => s + (c.monthly || 0), 0); // annual budget
+      const nowYear = FIRE.state.refDate(st).getFullYear();
+      const years = (st.tracker.years || []).slice().sort((a, b) => b.year - a.year);
+      if (!years.length) { grid.innerHTML = '<p class="hint">No years yet — pick a year above and click “Add / open year”.</p>'; return; }
+      grid.innerHTML = years.map((y) => {
+        const act = cats.reduce((s, c) => s + ((y.entries && y.entries[c.id]) || 0), 0);
+        const d = act - budget;
+        return '<div class="pred-box' + (y.year === nowYear ? " now" : "") + (act > 0 ? " has-actual" : "") + (y.id === this.selYearId ? " sel" : "") + '" data-action="trk-year-sel" data-id="' + y.id + '">' +
+          '<div class="pred-year">' + y.year + "</div>" +
+          '<div class="pred-total">' + C.fmt(act) + "</div>" +
+          (act > 0 ? '<div class="pred-delta ' + (d > 0 ? "bad" : "ok") + '">' + (d > 0 ? "+" : "") + C.fmt(d) + "</div>" : "") +
+          "</div>";
+      }).join("");
+    },
+
+    // Detail table (with inputs) for the selected month / year. Rebuilt only on
+    // mount and on selection change — never during typing — to preserve focus.
+    detailTable(item, cats, opts) {
+      let rows;
+      if (!cats.length) {
+        rows = '<tr><td colspan="4" class="hint" style="text-align:center">No ' + opts.kind + " categories on the Spending page.</td></tr>";
+      } else {
+        rows = cats.map((c) => {
+          const b = opts.budgetOf(c);
+          const a = (item.entries && item.entries[c.id]) || 0;
+          return "<tr><td>" + escapeHtml(c.name) + "</td><td>" + money(b) + "</td>" +
+            '<td><input class="num" ' + opts.inputAttr(c) + ' data-type="float" type="number" step="' + opts.step + '" min="0" value="' + a + '"></td>' +
+            '<td class="td-delta" data-c="' + c.id + '"></td></tr>';
+        }).join("");
+      }
+      return '<div class="acc-group-head"><h4 style="margin:6px 0">' + opts.title + "</h4>" +
+          '<button class="btn danger small" data-action="' + opts.delAction + '" data-id="' + item.id + '" title="Delete">✕ ' + opts.delLabel + "</button></div>" +
+        '<input class="acc-notes" data-arr="' + opts.arr + '" data-id="' + item.id + '" data-field="note" data-type="text" placeholder="' + opts.notePh + '" value="' + escapeHtml(item.note || "") + '">' +
+        '<div class="table-wrap"><table class="grid"><thead><tr><th>Category</th><th>' + opts.budgetHdr + "</th><th>Actual</th><th>Δ vs budget</th></tr></thead><tbody>" +
+          rows +
+          '<tr class="trk-subtotal"><td><b>Total</b></td><td class="trk-sum" data-fld="b"></td><td class="trk-sum" data-fld="a"></td><td class="trk-sum" data-fld="d"></td></tr>' +
+        "</tbody></table></div>" +
+        '<div class="callout trk-month-total"></div>';
+    },
+    renderMonthDetail(el) {
+      const host = el.querySelector("#trk-month-detail");
+      if (!host) return;
+      const st = S();
+      const m = (st.tracker.months || []).find((x) => x.id === this.selMonthId);
+      if (!m) { host.innerHTML = '<p class="hint">Select or add a month to log monthly spending.</p>'; return; }
+      host.innerHTML = this.detailTable(m, this.monthlyCats(st), {
+        kind: "monthly", title: m.ym, delAction: "del-month", delLabel: "Delete month",
+        arr: "tracker.months", notePh: "Note for this month…", budgetHdr: "Budget (₪/mo)", step: 10,
+        budgetOf: (c) => this.budgetFor(c),
+        inputAttr: (c) => 'data-trkm="' + m.id + '" data-trkc="' + c.id + '"',
+      });
+    },
+    renderYearDetail(el) {
+      const host = el.querySelector("#trk-year-detail");
+      if (!host) return;
+      const st = S();
+      const y = (st.tracker.years || []).find((x) => x.id === this.selYearId);
+      if (!y) { host.innerHTML = '<p class="hint">Select or add a year to log yearly one-off costs.</p>'; return; }
+      host.innerHTML = this.detailTable(y, this.yearlyCats(st), {
+        kind: "yearly", title: String(y.year), delAction: "del-year", delLabel: "Delete year",
+        arr: "tracker.years", notePh: "Note for this year…", budgetHdr: "Budget (₪/yr)", step: 100,
+        budgetOf: (c) => (c.monthly || 0),
+        inputAttr: (c) => 'data-trky="' + y.id + '" data-trkyc="' + c.id + '"',
+      });
+    },
+
+    // In-place refresh of the derived cells of one detail table (Δ, subtotal,
+    // total) without recreating inputs, so focus/cursor are preserved on typing.
+    refreshDetail(el, sel, cats, item, budgetOf) {
+      const host = el.querySelector(sel);
+      if (!host || !item) return;
+      const put = (node, val, isDelta) => {
+        if (!node) return;
+        node.textContent = (isDelta && val > 0 ? "+" : "") + money(val);
+        if (isDelta) node.style.color = val > 0 ? "var(--bad)" : "var(--ok)";
+      };
+      let bTot = 0, aTot = 0;
+      cats.forEach((c) => {
+        const b = budgetOf(c), a = (item.entries && item.entries[c.id]) || 0;
+        bTot += b; aTot += a;
+        put(host.querySelector('.td-delta[data-c="' + c.id + '"]'), a - b, true);
+      });
+      put(host.querySelector('.trk-sum[data-fld="b"]'), bTot);
+      put(host.querySelector('.trk-sum[data-fld="a"]'), aTot);
+      put(host.querySelector('.trk-sum[data-fld="d"]'), aTot - bTot, true);
+      const tot = host.querySelector(".trk-month-total");
+      if (tot) {
+        const v = aTot - bTot;
+        tot.innerHTML = "<b>Total:</b> budget " + money(bTot) + " · actual " + money(aTot) +
+          ' · <span style="color:' + (v > 0 ? "var(--bad)" : "var(--ok)") + '"><b>' + (v > 0 ? "+" : "") + money(v) + "</b></span> vs budget.";
+      }
+    },
+
     update(el) {
       const st = S();
-      const cats = st.spending.categories || [];
+      // Tiles carry no inputs, so rebuilding them on each keystroke is safe and
+      // keeps the selected tile's total/variance live.
+      this.renderMonthsGrid(el);
+      this.renderYearsGrid(el);
+      this.refreshDetail(el, "#trk-month-detail", this.monthlyCats(st), (st.tracker.months || []).find((x) => x.id === this.selMonthId), (c) => this.budgetFor(c));
+      this.refreshDetail(el, "#trk-year-detail", this.yearlyCats(st), (st.tracker.years || []).find((x) => x.id === this.selYearId), (c) => (c.monthly || 0));
+
+      // Budget vs actual over time (monthly categories only).
+      const cats = this.monthlyCats(st);
       const budget = cats.reduce((s, c) => s + this.budgetFor(c), 0);
       const months = (st.tracker.months || []).slice().sort((a, b) => a.ym.localeCompare(b.ym));
       C.line(el.querySelector("#trk-line"), {
@@ -695,19 +926,93 @@
           { name: "Actual", data: months.map((m) => cats.reduce((s, c) => s + ((m.entries && m.entries[c.id]) || 0), 0)), color: "#e15759" },
         ],
       });
+
+      // Budget vs actual over time (yearly one-off categories).
+      const ycats = this.yearlyCats(st);
+      const ybudget = ycats.reduce((s, c) => s + (c.monthly || 0), 0); // annual budget
+      const years = (st.tracker.years || []).slice().sort((a, b) => a.year - b.year);
+      const yCanvas = el.querySelector("#trk-year-line");
+      if (yCanvas) {
+        C.line(yCanvas, {
+          labels: years.map((y) => y.year),
+          series: [
+            { name: "Budget", data: years.map(() => ybudget), color: "#4e79a7" },
+            { name: "Actual", data: years.map((y) => ycats.reduce((s, c) => s + ((y.entries && y.entries[c.id]) || 0), 0)), color: "#e15759" },
+          ],
+        });
+      }
     },
   };
 
   /* ============================ PROJECTIONS ============================== */
   const projections = {
+    // Calendar year in which you reach a given (integer) age.
+    yearForAge(st, age) {
+      const bs = st.profile.birthDate;
+      if (bs) { const b = new Date(bs); if (!isNaN(b.getTime())) return b.getFullYear() + Math.round(age); }
+      const now = FIRE.state.refDate(st);
+      return now.getFullYear() + Math.round(age - st.profile.currentAge);
+    },
+    // Plain-language timeline: consecutive years sharing the same income /
+    // withdrawal regime are grouped into one phase ("From 2027–2030 …").
+    phasesPanel(st) {
+      const p = FIRE.engine.project(st);
+      const rows = p.rows;
+      if (!rows.length) return "";
+      const sig = (r) => {
+        const groups = Array.from(new Set(Object.keys(r.sources || {}).map((id) => p.groupOf[id] || id))).sort();
+        return (r.working ? "work" : "retire") + "|" + (r.pensionNet > 1 ? "pen" : "") + "|" + (r.withdrawalNet > 1 ? "wd:" + groups.join("+") : "");
+      };
+      const phases = [];
+      let cur = null;
+      rows.forEach((r) => {
+        const s = sig(r);
+        if (!cur || cur.sig !== s) {
+          cur = { sig: s, a0: r.age, a1: r.age, working: r.working, n: 0, sal: 0, pen: 0, wdNet: 0, wdTax: 0, bySrc: {} };
+          phases.push(cur);
+        }
+        cur.a1 = r.age; cur.n++;
+        cur.sal += r.salary + r.extra; cur.pen += r.pensionNet;
+        cur.wdNet += r.withdrawalNet; cur.wdTax += r.withdrawalTax;
+        Object.keys(r.sources || {}).forEach((id) => { const g = p.groupOf[id] || id; cur.bySrc[g] = (cur.bySrc[g] || 0) + r.sources[id]; });
+      });
+      const items = phases.map((ph) => {
+        const y0 = this.yearForAge(st, ph.a0), y1 = this.yearForAge(st, ph.a1);
+        const yr = y0 === y1 ? String(y0) : y0 + "–" + y1;
+        const ages = ph.a0 === ph.a1 ? "age " + ph.a0 : "ages " + ph.a0 + "–" + ph.a1;
+        const avg = (v) => v / ph.n;
+        const parts = [];
+        if (avg(ph.sal) > 1) parts.push((ph.working ? "earn" : "income") + " ~" + money(avg(ph.sal)) + "/yr");
+        if (avg(ph.pen) > 1) parts.push("pension net ~" + money(avg(ph.pen)) + "/yr");
+        if (ph.wdNet > 1) {
+          const srcs = Object.keys(ph.bySrc).sort((a, b) => ph.bySrc[b] - ph.bySrc[a])
+            .map((g) => escapeHtml(g) + " ~" + money(ph.bySrc[g] / ph.n) + "/yr");
+          parts.push("withdraw ~" + money(avg(ph.wdNet)) + "/yr net from " + srcs.join(", ") +
+            " (phase total " + money(ph.wdNet) + (ph.wdTax > 1 ? ", CG tax " + money(ph.wdTax) : "") + ")");
+        }
+        if (!parts.length) parts.push(ph.working ? "saving from income; portfolio grows" : "income covers spending");
+        return "<li><b>" + yr + "</b> (" + ages + ", " + ph.n + " yr) — <b>" + (ph.working ? "Working" : "Retired") + ":</b> " + parts.join(" · ") + ".</li>";
+      }).join("");
+      const dep = p.depletionAge ? '<p class="hint" style="color:var(--bad)">⚠ Liquid assets are projected to run out at age ' + p.depletionAge + " (" + this.yearForAge(st, p.depletionAge) + ").</p>" : "";
+      return '<div class="panel"><h3>Income &amp; withdrawals by phase</h3>' +
+        '<p class="hint">Consecutive years with the same income/withdrawal pattern, grouped. Amounts are nominal ₪, averaged per year within each phase.</p>' +
+        '<ul class="phase-list">' + items + "</ul>" + dep + "</div>";
+    },
     mount(el) {
       el.innerHTML = "<h1>Projections</h1>" +
         '<p class="lead">Year-by-year balance until age ' + S().profile.endAge + ', <b>aggregated by account group</b> (one Brokerage, one Bank, one Pension…). The first row is the <b>current calendar year prorated</b> from today (partial income/vests/growth), so it won\'t double-count what already happened this year. Edit individual accounts on the Accounts page.</p>' +
+        '<div class="panel"><h3>Retirement age</h3>' +
+          ctl("Retirement age", "profile.fireAge", { min: 30, max: 70, step: 1, type: "int" }) +
+          '<div class="toolbar"><button class="btn small" data-action="find-earliest" data-target="pr-earliest">🔎 Find earliest retirement age</button></div>' +
+          '<div id="pr-earliest"></div>' +
+          '<p class="hint">Same value as the retirement age on the Dashboard and Market &amp; Assumptions pages — change it here and the whole projection updates.</p>' +
+        "</div>" +
         '<div class="toolbar">' +
           toggle("Real (today's ₪)", "assumptions.realMode") +
           '<button class="btn small" data-action="export-csv">⬇ Export CSV</button>' +
         "</div>" +
         '<div class="panel"><h3>All entities over time (stacked)</h3><canvas id="pr-stack" height="300"></canvas></div>' +
+        this.phasesPanel(S()) +
         '<div class="panel"><h3>Income vs spending</h3><canvas id="pr-io" height="260"></canvas>' +
           '<p class="hint">Income = net salary + extra + <b>net pension</b> (after tax). "Withdrawn for living" is the net cash pulled from your portfolio to cover the rest of spending; selling from taxable/RSU pots pays capital-gains tax, so the gross sale is larger.</p>' +
           '<div id="pr-io-note" class="callout"></div>' +
@@ -1080,7 +1385,7 @@ mount(el) {
     "</div>" +
     '<div class="panel">' +
       '<h3>Cloud sync with Google + Cloudflare Worker</h3>' +
-      '<p class="hint">Google sign-in configuration is loaded automatically from the server.</p>' +
+      '<p class="hint">Google sign-in configuration is loaded automatically from the server. Signed in with the wrong account? Click <b>Sign out</b> to clear it and pick another.</p>' +
       '<p id="cloud-config-status" class="hint">Loading configuration...</p>' +
       '<div class="toolbar" style="margin-top:12px">' +
         '<button class="btn ghost" data-action="cloud-load">☁️ Load from cloud</button>' +
@@ -1119,8 +1424,78 @@ mount(el) {
     return String(now.getFullYear() + (age - Math.round(st.profile.currentAge)));
   }
 
+  /* ============================ FIRE ==================================== */
+  const fire = {
+    mount(el) {
+      el.innerHTML =
+        "<h1>🔥 FIRE target</h1>" +
+        '<p class="lead">The theoretical FIRE maths: how big a portfolio you need to live off a chosen <b>fixed</b> monthly spend at a safe withdrawal rate. Your <b>projections use your real Spending categories &amp; step-changes</b> — only tick the box below if you want them to assume this fixed spend instead.</p>' +
+        '<div class="grid-2">' +
+          '<div class="panel"><h3>Fixed spending &amp; withdrawal rate</h3>' +
+            ctl("FIRE monthly spend (fixed target)", "spending.fireMonthly", { min: 0, max: 60000, step: 250 }) +
+            ctl("Safe withdrawal rate (SWR)", "assumptions.swr", { min: 2, max: 6, step: 0.1, suffix: "%" }) +
+            '<div style="margin-top:10px">' + toggle("Use this fixed spend for projections (instead of my real categories &amp; steps)", "spending.useHeadlineSpending") + "</div>" +
+            '<p class="hint">SWR is the share of the portfolio you withdraw each year; the classic <b>4% rule</b> ≈ 25× your annual spend. Leave the box <b>unticked</b> to keep projections driven by your actual Spending page.</p>' +
+          "</div>" +
+          '<div class="panel"><h3>Portfolio target (theoretical)</h3><div id="fire-target"></div></div>' +
+        "</div>" +
+        '<div class="panel"><h3>Coverage &amp; earliest retirement age</h3><div id="fire-cover"></div></div>' +
+        '<div class="panel"><h3>Sensitivity: years to FIRE target vs return</h3><canvas id="fire-sens" height="240"></canvas>' +
+          '<p class="hint">For a range of expected taxable / money-market returns, the years until your projected non-pension assets reach the fixed-spend FIRE target above.</p></div>';
+      this.update(el);
+    },
+    update(el) {
+      const st = S();
+      const p = FIRE.engine.project(st);
+      const t = p.targets;
+      const annual = st.spending.fireMonthly * 12;
+      const tgt = el.querySelector("#fire-target");
+      if (tgt) {
+        tgt.innerHTML =
+          "<p>For a fixed <b>" + money(st.spending.fireMonthly) + "/mo</b> (" + money(annual) + "/yr) at <b>" + t.swr + "%</b> you need:</p>" +
+          '<div class="metric-value">' + money(t.target) + "</div>" +
+          '<table class="mini"><tr><th>Rule</th><th>Portfolio needed</th><th>× annual</th></tr>' +
+          "<tr><td>" + t.swr + "%</td><td>" + money(t.target) + "</td><td>" + (100 / t.swr).toFixed(0) + "×</td></tr>" +
+          "<tr><td>4.0%</td><td>" + money(t.target4) + "</td><td>25×</td></tr>" +
+          "<tr><td>3.5%</td><td>" + money(t.target35) + "</td><td>29×</td></tr>" +
+          "<tr><td>3.0%</td><td>" + money(t.target3) + "</td><td>33×</td></tr></table>" +
+          '<p class="hint">Flipped around: at <b>' + t.swr + "%</b>, your current net worth of <b>" + money(p.snapshot.total) + "</b> could sustain ≈ <b>" + money(p.snapshot.total * (t.swr / 100) / 12) + "/mo</b> forever (≈ " + money(p.snapshot.nonPension * (t.swr / 100) / 12) + "/mo from non-pension assets alone).</p>";
+      }
+      const cov = el.querySelector("#fire-cover");
+      if (cov) {
+        const fr = p.fireRow;
+        const coverage = fr && t.target ? (fr.nonPension / t.target) * 100 : 0;
+        const e = FIRE.engine.earliestFireAge(st);
+        cov.innerHTML =
+          "<p>At retirement age <b>" + st.profile.fireAge + "</b>, projected non-pension assets are <b>" + money(fr ? fr.nonPension : 0) + "</b> — <b>" + coverage.toFixed(0) + "%</b> of the " + money(t.target) + " target.</p>" +
+          '<div class="bar-track"><div class="bar-fill ' + (coverage >= 100 ? "ok" : "warn") + '" style="width:' + Math.min(100, coverage) + '%"></div></div>' +
+          (e.found
+            ? "<p><b>Earliest retirement age at your real spending: " + e.age + "</b> " + (e.yearsAway <= 0 ? "(you could retire now 🎉)" : "(" + e.yearsAway + " year" + (e.yearsAway === 1 ? "" : "s") + " away)") + ". This uses your actual categories/steps and requires the plan to survive to " + st.profile.endAge + "." + (e.age !== Math.round(st.profile.fireAge) ? ' <button class="btn small" data-action="set-fire-age" data-age="' + e.age + '">Set retirement age to ' + e.age + "</button>" : "") + "</p>"
+            : '<p class="hint" style="color:var(--bad)">No retirement age up to ' + st.profile.endAge + " survives at your current real spending &amp; assumptions. Lower spending, raise returns/income, or extend the horizon.</p>");
+      }
+      // Sensitivity: years until non-pension assets reach the fixed-spend target.
+      const sens = el.querySelector("#fire-sens");
+      if (sens) {
+        const base = FIRE.state.clone(st);
+        const returns = [2, 3, 4, 5, 6, 7, 8, 9, 10];
+        const years = returns.map((r) => {
+          const tt = FIRE.state.clone(base);
+          tt.accounts.forEach((a) => { if (a.kind === "taxable" || a.kind === "money_market") a.expectedReturn = r; });
+          (tt.income.grants || []).forEach((g) => { g.expectedGrowthPct = r + 1; });
+          const pp = FIRE.engine.project(tt);
+          const hit = pp.rows.find((row) => row.nonPension >= pp.targets.target);
+          return hit ? hit.age - pp.A0 : null;
+        });
+        C.bar(sens, {
+          labels: returns.map((r) => r + "%"),
+          series: [{ name: "Years to target", data: years.map((y) => (y == null ? 0 : y)), color: "#f28e2b" }],
+        });
+      }
+    },
+  };
+
   FIRE.ui = {
-    pages: { dashboard, accounts, assumptions, income, spending, tracker, pension, projections, predictions, whatif, data },
+    pages: { dashboard, accounts, assumptions, income, spending, fire, tracker, pension, projections, predictions, whatif, data },
     money, pct, escapeHtml,
   };
 })();

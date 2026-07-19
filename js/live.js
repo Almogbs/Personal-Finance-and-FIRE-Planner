@@ -6,7 +6,8 @@
  * currency pair or a stock symbol.
  *
  *  - USD/ILS: frankfurter.dev (ECB), falling back to open.er-api.com. No key.
- *  - Stock quote: Finnhub (finnhub.io) — requires a free API key (CORS-enabled).
+ *  - Stock quote: keyless — Yahoo Finance, fetched through a public CORS proxy.
+ *    No API key required (subject to Yahoo's / the proxy's rate limits).
  * ===========================================================================*/
 (function () {
   "use strict";
@@ -43,17 +44,8 @@
     throw new Error("no Yahoo data");
   }
 
-  async function finnhubQuote(symbol, apiKey) {
-    const url = "https://finnhub.io/api/v1/quote?symbol=" + encodeURIComponent(symbol) + "&token=" + encodeURIComponent(apiKey);
-    const r = await fetch(url);
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    const d = await r.json();
-    if (d && typeof d.c === "number" && d.c > 0) return { price: d.c, source: "finnhub" };
-    throw new Error("no quote for " + symbol);
-  }
-
-  // Try Yahoo via the configured proxy, then a built-in proxy, then direct;
-  // finally Finnhub if a key is supplied. `opts = { apiKey, corsProxy }`.
+  // Keyless quote: try Yahoo through the configured proxy, a built-in proxy,
+  // then direct. `opts = { corsProxy }`. No API key required.
   async function fetchQuote(symbol, opts) {
     opts = opts || {};
     symbol = (symbol || "").trim().toUpperCase();
@@ -66,11 +58,7 @@
     for (const px of proxies) {
       try { return await yahooQuote(symbol, px); } catch (e) { last = e; }
     }
-    if (opts.apiKey) {
-      try { return await finnhubQuote(symbol, opts.apiKey); }
-      catch (e) { throw new Error("Finnhub failed (" + e.message + ")"); }
-    }
-    throw new Error("Yahoo/proxy blocked. Try another CORS proxy or add a free Finnhub key. [" + (last ? last.message : "?") + "]");
+    throw new Error("Yahoo blocked (usually CORS). Try a different CORS proxy. [" + (last ? last.message : "?") + "]");
   }
 
   // Current date from a public time API (optional; browser clock works offline).
@@ -90,5 +78,5 @@
     throw new Error("no date in response");
   }
 
-  FIRE.live = { fetchUsdIls, fetchQuote, yahooQuote, finnhubQuote, fetchDate };
+  FIRE.live = { fetchUsdIls, fetchQuote, yahooQuote, fetchDate };
 })();

@@ -19,6 +19,23 @@
     return JSON.parse(JSON.stringify(obj));
   }
 
+  /* ---- Cost basis ---------------------------------------------------------
+   * A taxable holding's capital-gains tax applies to the GAIN only. Users can
+   * express the gain as a percentage vs. their buying value (`gainPct`) instead
+   * of typing an absolute cost basis — e.g. gainPct = 20 means the position is
+   * up 20% from what they paid, so basis = balance / 1.20. A negative gainPct
+   * models a position that is currently at a loss (no gain → no CG tax).
+   * Returns the cost basis in the account's OWN currency.
+   *-----------------------------------------------------------------------*/
+  function costBasisOf(a) {
+    if (a && a.gainPct != null && a.gainPct !== "" && isFinite(a.gainPct)) {
+      const denom = 1 + Number(a.gainPct) / 100;
+      const bal = a.balance || 0;
+      return denom > 0 ? bal / denom : bal;
+    }
+    return a && a.costBasis != null ? a.costBasis : (a ? a.balance : 0);
+  }
+
   /* ---------------------------------------------------------------------------
    * Account types. `kind` drives how the engine treats the account.
    *   cash          – no growth by default, fully liquid
@@ -52,7 +69,6 @@
       },
 
       live: {
-        stockApiKey: "",
         corsProxy: "https://api.allorigins.win/raw?url=",
       },
 
@@ -64,7 +80,7 @@
         customTarget: { kind: "stock", name: "Custom target", growth: 8, capGainsRate: 25 },
       },
 
-      tracker: { months: [] },
+      tracker: { months: [], years: [] },
       predictions: { baselineSavedAt: null, accounts: [], years: [], actuals: {} },
 
       profile: {
@@ -95,6 +111,10 @@
         },
         pensionAnnuityCoefficient: 220,
         swr: 4,
+        // Order in which account types are drained to cover a retirement
+        // shortfall (first = spent first). Pension is only ever drawn after its
+        // access age / when not annuitized, regardless of position.
+        withdrawalOrder: ["cash", "money_market", "taxable", "rsu", "study_fund", "custom", "pension"],
         pensionMode: "annuity",
         pensionEntitlingCeiling: 9430,
         pensionExemptionPct: 52,
@@ -131,7 +151,7 @@
         allocations: [],
         defaultAccountId: investDefault,
         grants: [
-          { id: uid("grant"), name: "Company RSU", symbol: "", currency: "USD", sharePrice: 150, expectedGrowthPct: 8, vestedShares: 100, sharesPerYear: 100, grantBasisUsd: 80, ordinaryTaxRate: 47, capGainsRate: 25, startAge: 30, stopAge: 45 },
+          { id: uid("grant"), name: "Company RSU", symbol: "", currency: "USD", sharePrice: 150, expectedGrowthPct: 8, vestedShares: 100, sharesPerYear: 100, grantBasisUsd: 80, ordinaryTaxRate: 47, capGainsRate: 25, startAge: 30, stopAge: 45, vestUntilRetire: false },
         ],
         extra: [],
       },
@@ -140,6 +160,9 @@
         growthPct: 2,
         fireMonthly: 12000,
         useCategoriesInRetirement: true,
+        // When true, retirement projections use the fixed FIRE monthly spend
+        // above instead of your real categories/steps. Default false = use real.
+        useHeadlineSpending: false,
         categories: [
           { id: uid("cat"), name: "Housing", freq: "monthly", monthly: 4000, startAge: 0, endAge: 80, growthPct: 2, inflate: true },
           { id: uid("cat"), name: "Food & groceries", freq: "monthly", monthly: 2000, startAge: 0, endAge: 80, growthPct: 2, inflate: true },
@@ -190,7 +213,7 @@
       sharePrice: 100, expectedGrowthPct: (st.assumptions.defaultReturns.rsu || 8),
       vestedShares: 0, sharesPerYear: 0, grantBasisUsd: 0,
       ordinaryTaxRate: 47, capGainsRate: 25,
-      startAge: Math.round(st.profile.currentAge), stopAge: st.profile.fireAge,
+      startAge: Math.round(st.profile.currentAge), stopAge: st.profile.fireAge, vestUntilRetire: false,
     };
   }
 
@@ -263,11 +286,13 @@
     if (!s.meta) s.meta = { schema: SCHEMA_VERSION };
     if (s.meta.schema == null) s.meta.schema = SCHEMA_VERSION;
     if (!s.meta.theme) s.meta.theme = "light";
-    if (!s.live) s.live = { stockApiKey: "", corsProxy: "" };
+    if (!s.live) s.live = { corsProxy: "" };
     if (!s.whatif) s.whatif = { sourceId: "", sellPct: 100, sourceGrowth: null, targetId: "", targetGrowth: null, years: 20, afterTax: true };
     if (!s.whatif.customSource) s.whatif.customSource = { kind: "stock", name: "Custom source", value: 200000, costBasis: 100000, capGainsRate: 25, growth: 7, currency: "USD", sharePrice: 100, vestedShares: 500, grantBasisUsd: 40, ordinaryTaxRate: 47 };
     if (!s.whatif.customTarget) s.whatif.customTarget = { kind: "stock", name: "Custom target", growth: 8, capGainsRate: 25 };
-    if (!s.tracker) s.tracker = { months: [] };
+    if (!s.tracker) s.tracker = { months: [], years: [] };
+    if (!Array.isArray(s.tracker.months)) s.tracker.months = [];
+    if (!Array.isArray(s.tracker.years)) s.tracker.years = [];
     if (!s.predictions) s.predictions = { baselineSavedAt: null, accounts: [], years: [], actuals: {} };
     if (s.profile) {
       if (s.profile.birthDate == null) s.profile.birthDate = "";
@@ -279,7 +304,17 @@
     s.assumptions = Object.assign({}, d.assumptions, s.assumptions || {});
     s.assumptions.defaultReturns = Object.assign({}, d.assumptions.defaultReturns, (s.assumptions || {}).defaultReturns || {});
     s.assumptions.payroll = Object.assign({}, d.assumptions.payroll, (s.assumptions || {}).payroll || {});
-    s.spending = Object.assign({}, d.spending, s.spending || {});
+    // Ensure the withdrawal order exists and lists every known account kind
+    // exactly once (append any missing kinds so nothing becomes undrawable).
+    const ALL_KINDS = ["cash", "money_market", "taxable", "rsu", "study_fund", "custom", "pension"];
+    if (!Array.isArray(s.assumptions.withdrawalOrder)) s.assumptions.withdrawalOrder = d.assumptions.withdrawalOrder.slice();
+    s.assumptions.withdrawalOrder = s.assumptions.withdrawalOrder.filter((k) => ALL_KINDS.indexOf(k) >= 0);
+    ALL_KINDS.forEach((k) => { if (s.assumptions.withdrawalOrder.indexOf(k) < 0) s.assumptions.withdrawalOrder.push(k); });
+    const priorSp = s.spending || {};
+    s.spending = Object.assign({}, d.spending, priorSp);
+    // Derive the new "use fixed FIRE spending" flag from the old retirement
+    // toggle for plans saved before this field existed.
+    if (priorSp.useHeadlineSpending == null) s.spending.useHeadlineSpending = priorSp.useCategoriesInRetirement === false;
     const priorIncome = s.income || {};
     const hadGrants = Array.isArray(priorIncome.grants);
     const legacy = priorIncome.rsu;
@@ -305,7 +340,7 @@
     }
     delete s.income.rsu;
     if (s.market) delete s.market.amznPrice;
-    (s.income.grants || []).forEach((g) => { if (g.symbol == null) g.symbol = ""; });
+    (s.income.grants || []).forEach((g) => { if (g.symbol == null) g.symbol = ""; if (g.vestUntilRetire == null) g.vestUntilRetire = false; });
     // Salary mode: older plans only had a net figure — keep them on 'net'.
     if (!s.income.salaryMode) s.income.salaryMode = "net";
     if (s.income.grossMonthly == null) s.income.grossMonthly = s.income.monthlyNetSalary || 0;
@@ -322,6 +357,15 @@
       if (a.notes == null) a.notes = "";
       if (a.feeDeposit == null) a.feeDeposit = a.kind === "pension" ? (s.assumptions.pensionFeeDeposit || 0) : 0;
       if (a.feeBalance == null) a.feeBalance = a.kind === "pension" ? (s.assumptions.pensionFeeBalance || 0) : (a.kind === "study_fund" ? (s.assumptions.studyFundFeeBalance || 0.5) : 0);
+      // Derive gain% vs buying value for taxable holdings from any stored cost
+      // basis, so the new percentage input starts from the existing plan.
+      if (a.gainPct == null) {
+        if (a.kind === "taxable" && a.costBasis != null && a.costBasis > 0 && a.balance != null) {
+          a.gainPct = Math.round(((a.balance / a.costBasis) - 1) * 10000) / 100;
+        } else {
+          a.gainPct = a.kind === "taxable" ? 0 : null;
+        }
+      }
     });
     // Default allocation bucket must point at a real account.
     if (!s.income.defaultAccountId || !(s.accounts || []).some((a) => a.id === s.income.defaultAccountId)) {
@@ -370,6 +414,9 @@
       includeInFire: true,
       costBasis: 0,
       capGainsRate: kind === "taxable" ? 25 : 0,
+      // Gain/loss vs buying value (%). Drives cost basis for CG tax on taxable
+      // holdings; null for non-taxable accounts (no capital-gains modeling).
+      gainPct: kind === "taxable" ? 0 : null,
       accessAge: kind === "pension" ? 60 : 0,
       // Management fees (%): deposit fee only for pension; balance fee for both.
       feeDeposit: kind === "pension" ? (a.pensionFeeDeposit || 0) : 0,
@@ -411,6 +458,7 @@
     STORAGE_KEY,
     uid,
     clone,
+    costBasisOf,
     defaultState,
     get,
     set,

@@ -29,6 +29,8 @@ Each account has:
 | `accessAge` | age before which the account is **locked** (pension = 60) |
 | `liquid` | may be drawn to fund spending shortfalls |
 | `includeInFire` | counts toward FIRE-eligible assets |
+| `capGainsRate` | capital-gains tax % applied to the **gain** when sold |
+| `costBasis` / `gainPct` | buying value used to size the taxable gain. Taxable accounts can set **gain vs buy value %** instead of an absolute basis: `basis = balance / (1 + gainPct/100)` (a negative `gainPct` models a position at a loss → no gain → no CG tax) |
 
 ### Yearly update order
 
@@ -40,9 +42,10 @@ For each age:
 4. **Cash flow:** compute take-home income minus spending.
    - **Surplus** → distributed via **allocation rules** (see below); the remainder goes to the
      **default account** (`income.defaultAccountId`, typically your checking account).
-   - **Shortfall** → withdrawn from liquid accounts in priority order
-     `cash → money_market → taxable → rsu → study_fund → custom → pension`,
-     skipping any account still under its `accessAge`.
+   - **Shortfall** → withdrawn from liquid accounts in a **configurable order**
+     (`assumptions.withdrawalOrder`, default
+     `cash → money_market → taxable → rsu → study_fund → custom → pension`, editable on the
+     Market & Assumptions page), skipping any account still under its `accessAge`.
    - If a shortfall cannot be covered, the first such age is recorded as the **depletion age**.
 
 > Employer pension and study-fund deposits are modeled **only** as an account's `monthlyContribution`
@@ -81,12 +84,12 @@ tax          = ordinaryBase * ordinaryTaxRate + appreciation * capGainsRate
 netILS       = grossILS - tax
 ```
 
-- **Currently vested shares** seed a virtual "RSU (AMZN, net)" account at its after-tax value. This
-  also appears as a **computed (read-only) card on the Accounts page** — edit it via the Income page.
-- **Future vests** (while working — i.e. before the retirement/FIRE age) use a share price grown at
-  the RSU expected-return assumption: `amznPrice * (1 + rsuReturn/100)^k`. Their after-tax value is
-  added to the RSU account, which then compounds at the RSU return (models "hold the shares").
-  New vesting **stops automatically at the FIRE age** (there is no separate "vest until" setting).
+- **Currently vested shares** seed a virtual, per-grant net-value account. Each grant also appears as a
+  **computed (read-only) card on the Accounts page** — edit it via the Income page.
+- **Future vests** (while working — i.e. before the retirement/FIRE age) use a share price grown at the
+  grant's own expected-return assumption: `sharePrice * (1 + expectedGrowthPct/100)^k`. Their after-tax
+  value is added to the grant account, which then compounds at that return (models "hold the shares").
+  New vesting is bounded by each grant's own `[startAge, stopAge)` window (see the grants section below).
 
 This is a simplification: it does not model per-lot holding periods, exact trustee rules, the 3% surtax,
 US-Israel treaty interactions, or partial sales.
@@ -97,7 +100,7 @@ Monthly spend at a given age is resolved as:
 
 1. **Step override** — if any `steps[].fromAge <= age`, use the latest one:
    `step.monthly * (1 + growthPct/100)^(age - step.fromAge)`.
-2. Else if retired and `useCategoriesInRetirement = false`:
+2. Else if retired and `useHeadlineSpending = true` (opt-in on the FIRE tab):
    `fireMonthly * (1 + inflation)^(age - fireAge)`.
 3. Else **sum of active categories**. Amounts are **today's money**; if `inflate`, they grow from the
    *current age* forward: `monthly * (1 + growth)^(max(0, age - currentAge))`.
@@ -167,7 +170,9 @@ net       = gross − tax
 ## Withdrawals & capital-gains tax
 
 When retirement spending exceeds income (salary + extra + net pension), the shortfall is withdrawn from
-liquid accounts in priority order. Selling from an account with unrealized gains pays capital-gains tax
+liquid accounts in the **configurable order** `assumptions.withdrawalOrder` (reorder it on the
+Market & Assumptions page). Accounts with `includeInFire = false` are **never** drawn down (that money is
+earmarked outside the FIRE plan). Selling from an account with unrealized gains pays capital-gains tax
 on the gain portion, so the **gross sale exceeds the net cash delivered**:
 
 ```
@@ -177,8 +182,10 @@ grossSale = netNeeded / (1 − effRate)
 tax       = grossSale − netNeeded
 ```
 
-Cost basis is tracked per account (deposits raise basis; growth is unrealized). Each row records the
-net withdrawn, the tax, and the **source account/group** of the withdrawal.
+Cost basis is tracked per account (deposits raise basis; growth is unrealized). For taxable holdings the
+basis can be entered directly or derived from the **gain vs buy value %** (`gainPct`) on the Accounts
+page, so capital-gains tax applies to the gains only. Each row records the net withdrawn, the tax, and
+the **source account/group** of the withdrawal.
 
 Income-tax brackets used (annual, nominal ₪, ~2026, thresholds scaled by inflation in future years):
 10% / 14% / 20% / 31% / 35% / 47% / 50%.
@@ -192,12 +199,12 @@ target(swr) = fireMonthly * 12 / (swr/100)
 ```
 
 The dashboard shows targets at the configured SWR plus the classic 4% / 3.5% / 3% rules, and the
-**coverage** = projected non-pension assets at FIRE age ÷ target.
+**coverage** = projected non-pension assets at retirement age ÷ target.
 
-## Earliest FIRE age
+## Earliest retirement age
 
 `earliestFireAge(state)` searches every candidate retirement age from the current age to the end age.
-For each, it re-runs the projection with that FIRE age and returns the **first age that survives** to
+For each, it re-runs the projection with that retirement age and returns the **first age that survives** to
 the end age (liquid never runs out before pension access; nothing depletes). It uses the actual
 projected spending (categories/steps), so it reflects the plan you've modeled rather than the headline
 `fireMonthly`.
@@ -206,7 +213,9 @@ projected spending (categories/steps), so it reflects the plan you've modeled ra
 
 - Single fixed return per account (no volatility / sequence-of-returns risk).
 - Constant FX.
-- No tax on taxable-account withdrawals during drawdown (only RSU vesting is taxed).
+- Capital-gains tax on taxable-account drawdowns is modeled on the **gain portion only** (basis from
+  `costBasis`/`gainPct`); it does not model per-lot holding periods, loss harvesting, or the exact
+  Israeli reporting rules.
 - No Bituach Leumi / health tax modeling on income.
 - Pension drawdown treated as liquid from access age; annuity shown only as an estimate.
 
