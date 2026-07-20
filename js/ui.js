@@ -174,7 +174,11 @@
         "<p>Your modeled spending that year is <b>" + money(spMo) + "/mo</b> (" + money(spYr) + "/yr) — from your real categories &amp; steps.</p>" +
         "<p>That pot alone covers ≈ <b>" + runway.toFixed(0) + "×</b> your first retirement year (before further growth &amp; pension).</p>" +
         '<div class="callout">' + (p.survives ? '<span class="ok">✓ Plan survives to ' + st.profile.endAge + "</span>" : '<span class="bad">✕ Depletes at age ' + p.depletionAge + "</span>") + " at retirement age " + st.profile.fireAge + ", using your real spending.</div>" +
-        "<p>Pension at " + p.pension.accessAge + ": gross <b>" + money(p.pension.grossMonthly) + "/mo</b>, net after tax <b>" + money(p.pension.netMonthly) + "/mo</b> (≈ " + money(p.pension.netMonthlyReal) + "/mo in today's ₪). See the Pension page for the breakdown.</p>" +
+        "<p>Pension at " + p.pension.accessAge + ": " +
+        (p.pension.mode === "annuity"
+          ? "gross <b>" + money(p.pension.grossMonthly) + "/mo</b>, net after tax <b>" + money(p.pension.netMonthly) + "/mo</b> (≈ " + money(p.pension.netMonthlyReal) + "/mo in today's ₪)."
+          : "lump-sum withdrawal <b>" + money(p.pension.lumpGross) + "</b>, tax <b>" + money(p.pension.lumpTax) + "</b>, net deposited <b>" + money(p.pension.lumpNet) + "</b> (≈ " + money(p.pension.lumpNetReal) + " in today's ₪).") +
+        "</p>" +
         '<p class="hint">The theoretical SWR portfolio target (fixed spend ÷ SWR) lives on the <b>🔥 FIRE</b> tab.</p>';
 
       // Optional: earliest survivable retirement age.
@@ -1192,7 +1196,9 @@
         [["annuity", "Monthly annuity (קצבה)"], ["lump", "Lump / drawdown"]].map((m) => '<option value="' + m[0] + '"' + (st.assumptions.pensionMode === m[0] ? " selected" : "") + ">" + m[1] + "</option>").join("") + "</select>";
       el.innerHTML =
         "<h1>Pension (Israel)</h1>" +
-        '<p class="lead">Income from your pension after retirement, modeled on Israeli rules: monthly קצבה = pot ÷ conversion coefficient, with a tax-exempt portion of the entitling-pension ceiling and the rest taxed at income-tax rates.</p>' +
+        '<p class="lead">Income from your pension after retirement, modeled on Israeli rules. Two modes:<br>' +
+        '<b>Annuity (קצבה)</b> — at access age the pot is exchanged for a guaranteed lifelong monthly income (pot ÷ coefficient); the pot goes to ₪0.<br>' +
+        '<b>Lump sum (משיכה)</b> — at access age the entire pot is withdrawn, taxed (with the entitling-pension exemption), and the net is deposited into your default liquid account; the pot goes to ₪0.</p>' +
         '<div class="grid-2">' +
         '<div class="panel"><h3>Pension settings</h3>' +
           '<div class="control"><label>Payout mode</label><div class="ctl-row">' + modeSel + "</div></div>" +
@@ -1216,7 +1222,18 @@
       const bd = el.querySelector("#pen-breakdown");
       if (bd) {
         if (pi.mode === "lump") {
-          bd.innerHTML = '<div class="callout">Lump / drawdown mode: the pension pot (≈ <b>' + money(pi.potAtAccess) + '</b> at age ' + pi.accessAge + ") becomes available at the access age and is drawn to fund spending like any other account. Switch to <b>annuity</b> mode to see a monthly קצבה with tax breakdown.</div>";
+          bd.innerHTML =
+            '<div class="callout">Lump-sum withdrawal at age ' + pi.accessAge + ': the entire pension pot is cashed out, taxed, and the net deposited into your default liquid account.</div>' +
+            '<table class="grid"><tbody>' +
+            row2("Pot at access age " + pi.accessAge, money(pi.potAtAccess)) +
+            row2("Gross withdrawal", "<b>" + money(pi.lumpGross) + "</b>") +
+            row2("Entitling ceiling (at access, inflated)", money(pi.entitlingCeilingAtAccess)) +
+            row2("Tax-exempt portion (" + pi.exemptionPct + "%)", money(pi.exemptionPct / 100 * pi.entitlingCeilingAtAccess * 12)) +
+            row2("Estimated income tax", "−" + money(pi.lumpTax)) +
+            row2("<b>Net deposited to liquid</b>", "<b>" + money(pi.lumpNet) + "</b>") +
+            row2("Net in today's ₪", money(pi.lumpNetReal)) +
+            "</tbody></table>" +
+            '<p class="hint">The full pot is withdrawn at the access age. Tax uses the entitling-pension exemption (' + pi.exemptionPct + '% of the ceiling, inflated) and progressive income-tax brackets on the taxable remainder. Net proceeds are added to your default liquid account and grow with that account from that point. Pension balance drops to ₪0.</p>';
         } else {
           bd.innerHTML =
             '<table class="grid"><tbody>' +

@@ -330,30 +330,74 @@
       // 5) Spending (prorated in year 0).
       const spend = monthlySpend(state, age) * 12 * yf;
 
-      // 5b) Pension annuity income (annuity mode): convert each pension pot to a
-      //     (CPI-linked) lifelong annuity at its access age, taxed per Israeli law.
+      // 5b) Pension at access age — two modes:
+      //
+      //  ANNUITY (קצבה): At the access age the entire pot is exchanged for a
+      //  lifelong monthly annuity. The pot goes to ₪0 immediately (it now
+      //  belongs to the insurance company). The annuity pays monthly =
+      //  pot ÷ coefficient, CPI-linked, partially tax-exempt per Israeli law.
+      //  The pension balance no longer grows or counts as a personal asset.
+      //
+      //  LUMP SUM (היוון/משיכה): At the access age the pot is withdrawn in
+      //  full. Tax is applied (entitling-pension exemption + progressive income
+      //  tax on the taxable portion). The net proceeds are deposited into the
+      //  default liquid account. Pension balance goes to ₪0; no further
+      //  contributions or growth. The money is now in regular liquid savings.
       const inflFactor = Math.pow(1 + infl, k);
       let pensionGross = 0, pensionTax = 0, pensionNet = 0;
-      if (pcfg.mode === "annuity") {
-        accs.forEach((a) => {
-          if (a.kind !== "pension") return;
-          const access = a.accessAge || state.profile.pensionAccessAge;
-          if (age < access) return;
+      let pensionLumpGross = 0, pensionLumpTax = 0, pensionLumpNet = 0;
+
+      accs.forEach((a) => {
+        if (a.kind !== "pension") return;
+        const access = a.accessAge || state.profile.pensionAccessAge;
+        if (age < access) return;
+
+        if (pcfg.mode === "annuity") {
+          // --- Annuity mode ---
           if (a.annuityGrossAnnual == null) {
+            // First year at access age: convert pot → annuity.
             a.annuityGrossAnnual = (a.bal / pcfg.coefficient) * 12;
             pensionConv.potAtAccess += a.bal;
             pensionConv.grossAnnual += a.annuityGrossAnnual;
             pensionConv.factor = inflFactor;
             pensionConv.age = age;
+            // The pot is gone — it belongs to the insurer now.
+            a.bal = 0;
+            a.basis = 0;
+            a.contrib = 0;
           } else if (pcfg.cpiLinked) {
             a.annuityGrossAnnual *= 1 + infl;
           }
-          const payGross = Math.min(a.bal, a.annuityGrossAnnual * yf);
-          a.bal -= payGross;
+          // Annuity pays as income (not drawn from bal since bal = 0).
+          const payGross = a.annuityGrossAnnual * yf;
           const tax = pensionTaxAnnual(payGross, inflFactor);
           pensionGross += payGross; pensionTax += tax; pensionNet += payGross - tax;
-        });
-      }
+
+        } else {
+          // --- Lump-sum mode ---
+          if (a.bal > 0 && !a._lumpWithdrawn) {
+            // First year at access age: withdraw entire pot, pay tax, deposit
+            // net proceeds into the default liquid account.
+            const gross = a.bal;
+            const tax = pensionTaxAnnual(gross, inflFactor);
+            const net = gross - tax;
+            pensionLumpGross += gross;
+            pensionLumpTax += tax;
+            pensionLumpNet += net;
+            // Deposit net into default account (increases its balance + basis).
+            deposit(defaultAcc, net);
+            // Zero the pension — it's been cashed out.
+            a.bal = 0;
+            a.basis = 0;
+            a.contrib = 0;
+            a._lumpWithdrawn = true;
+            // Record for pensionConv output.
+            pensionConv.potAtAccess += gross;
+            pensionConv.factor = inflFactor;
+            pensionConv.age = age;
+          }
+        }
+      });
 
       // 6) Cash flow. Income = take-home + extra + net pension annuity.
       //    Surplus is reinvested; a shortfall is withdrawn NET from liquid
@@ -423,6 +467,7 @@
       rows.push({
         age, k, working, salary, extra, spend, net,
         incomeTotal, pensionGross, pensionTax, pensionNet,
+        pensionLumpGross, pensionLumpTax, pensionLumpNet,
         withdrawalNet, withdrawalGross, withdrawalTax, sources,
         perAccount, total, liquid, nonPension, pension, fireEligible,
         realFactor,
@@ -440,30 +485,53 @@
       target3: annualFire / 0.03,
     };
 
-    // Pension annuity (Israeli law): pot ÷ coefficient, split into a tax-exempt
-    // portion (exemptionPct of the entitling ceiling) and a taxable remainder.
+    // Pension summary info (Israeli law).
     const pf = pensionConv.factor || 1;
-    const grossMonthly = pensionConv.grossAnnual / 12;
-    const ceilingMonthly = pcfg.ceiling * pf;
-    const exemptMonthly = Math.min(grossMonthly, (pcfg.exemptionPct / 100) * ceilingMonthly);
-    const taxableMonthly = Math.max(0, grossMonthly - exemptMonthly);
-    const taxMonthly = pensionTaxAnnual(pensionConv.grossAnnual, pf) / 12;
-    const pensionInfo = {
-      mode: pcfg.mode,
-      accessAge: state.profile.pensionAccessAge,
-      coefficient: pcfg.coefficient,
-      potAtAccess: pensionConv.potAtAccess,
-      grossMonthly,
-      exemptMonthly,
-      taxableMonthly,
-      taxMonthly,
-      netMonthly: grossMonthly - taxMonthly,
-      // today's-₪ equivalents at the access year
-      grossMonthlyReal: grossMonthly / pf,
-      netMonthlyReal: (grossMonthly - taxMonthly) / pf,
-      entitlingCeilingAtAccess: ceilingMonthly,
-      exemptionPct: pcfg.exemptionPct,
-    };
+    let pensionInfo;
+    if (pcfg.mode === "annuity") {
+      // Annuity: pot ÷ coefficient, split into a tax-exempt portion
+      // (exemptionPct of the entitling ceiling) and a taxable remainder.
+      const grossMonthly = pensionConv.grossAnnual / 12;
+      const ceilingMonthly = pcfg.ceiling * pf;
+      const exemptMonthly = Math.min(grossMonthly, (pcfg.exemptionPct / 100) * ceilingMonthly);
+      const taxableMonthly = Math.max(0, grossMonthly - exemptMonthly);
+      const taxMonthly = pensionTaxAnnual(pensionConv.grossAnnual, pf) / 12;
+      pensionInfo = {
+        mode: pcfg.mode,
+        accessAge: state.profile.pensionAccessAge,
+        coefficient: pcfg.coefficient,
+        potAtAccess: pensionConv.potAtAccess,
+        grossMonthly,
+        exemptMonthly,
+        taxableMonthly,
+        taxMonthly,
+        netMonthly: grossMonthly - taxMonthly,
+        // today's-₪ equivalents at the access year
+        grossMonthlyReal: grossMonthly / pf,
+        netMonthlyReal: (grossMonthly - taxMonthly) / pf,
+        entitlingCeilingAtAccess: ceilingMonthly,
+        exemptionPct: pcfg.exemptionPct,
+      };
+    } else {
+      // Lump sum: pot withdrawn in full, taxed, net deposited to liquid.
+      const lumpRow = rows.find((r) => r.pensionLumpGross > 0);
+      pensionInfo = {
+        mode: pcfg.mode,
+        accessAge: state.profile.pensionAccessAge,
+        coefficient: pcfg.coefficient,
+        potAtAccess: pensionConv.potAtAccess,
+        lumpGross: lumpRow ? lumpRow.pensionLumpGross : 0,
+        lumpTax: lumpRow ? lumpRow.pensionLumpTax : 0,
+        lumpNet: lumpRow ? lumpRow.pensionLumpNet : 0,
+        lumpGrossReal: lumpRow ? lumpRow.pensionLumpGross / pf : 0,
+        lumpNetReal: lumpRow ? lumpRow.pensionLumpNet / pf : 0,
+        exemptionPct: pcfg.exemptionPct,
+        // Zero annuity fields for compatibility.
+        grossMonthly: 0, exemptMonthly: 0, taxableMonthly: 0, taxMonthly: 0,
+        netMonthly: 0, grossMonthlyReal: 0, netMonthlyReal: 0,
+        entitlingCeilingAtAccess: pcfg.ceiling * pf,
+      };
+    }
 
     const snap = snapshot(state);
     const accountsMeta = accs.map((a) => ({ id: a.id, name: a.name, kind: a.kind, group: a.group }));
