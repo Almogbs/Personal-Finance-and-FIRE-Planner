@@ -81,6 +81,18 @@ The theoretical FIRE target maths, kept separate from your real spending:
 - The earliest-age searches and sensitivity chart compute in the background (a short "computing…"
   appears while sliders move).
 
+### 🎲 Monte Carlo (section at the bottom of the 🔥 FIRE tab)
+Sequence-of-returns risk: the plan is re-run hundreds of times with randomized yearly returns.
+- **Settings** — simulations per run, target confidence, and annual volatility (std dev %) per
+  account type (reference: global equities ~15–18%, bond-heavy ~5–8%, single stock 30%+). Each year
+  every account *type* gets one shared shock, so all your equity funds move together.
+- **Results** — **success rate** (share of paths surviving to your end age), median / p10 / p90
+  final net worth, the typical depletion age of failing paths, a **percentile fan chart** of net
+  worth, and a **final-net-worth distribution**.
+- **Safe retirement age** — the earliest retirement age whose success rate meets your target
+  confidence, with a one-click apply button. Heavy computations are debounced and run in the
+  background.
+
 ## 💰 Income
 - **Salary**: choose **gross** or **net** mode.
   - *Gross mode* (default): enter gross salary, taxable extras (travel, etc.), and credit points; the app
@@ -124,6 +136,9 @@ The theoretical FIRE target maths, kept separate from your real spending:
 - **Spending used by age** — a preview table showing, as **year + exact-age ranges**, which rule decides
   your spend (step override / list switch → categories of the active list, or the fixed FIRE spend if
   enabled on the 🔥 FIRE tab).
+- **🏠 Mortgage row** — when a mortgage is part of the plan, its current monthly payment appears as a
+  read-only item in the categories table, the mix doughnut, and an "all-in" total (a toggle hides the
+  display; the cashflow always pays the mortgage either way).
 - **Category defaults** — the default per-year growth applied to new categories. The theoretical
   fixed-spend FIRE target now lives on the **🔥 FIRE** tab.
 - A line chart projects total annual spend to 80.
@@ -148,7 +163,14 @@ works like the Predictions page — a grid of clickable **tiles**, and you load 
   History is saved with your plan.
 
 ## 🏠 Mortgage & Real Estate
-A mortgage **simulator with Israeli tracks (מסלולים)**, fully integrated into the plan:
+A mortgage **simulator with Israeli tracks (מסלולים)** — for a mortgage you **have** or one you're
+only **considering**:
+- **Include in my plan** toggle — ticked: equity feeds net worth, rent feeds income, payments feed
+  outgoings and survival checks everywhere. Unticked: the tab becomes a **pure what-if simulator**
+  that touches nothing in the plan (all charts and totals still work).
+- **Deal economics cards** — total repayment (principal + interest), interest as % of principal,
+  rent collected until payoff, and the **net cost after rent** — the numbers that answer "is this
+  mortgage a good idea?".
 - **Properties** — value today, appreciation %/yr, monthly rent (0 if you live there), rent growth.
 - **Mortgage tracks** — one row per מסלול: קל"צ (fixed, unlinked), קבועה צמודה (fixed, CPI-linked),
   פריים (variable prime), משתנה כל 5 (rate resets every 5 years, linked or not). Each row has its
@@ -214,21 +236,14 @@ Everything is keyed by **calendar year**. Three-step flow (explained on-page):
    predicted-vs-actual table, and a chart plots both lines. Years that exist only as actuals (e.g. past
    years) show "—" for the prediction. **Remove actuals** clears a year's recorded values.
 
-## 🎲 Monte Carlo
-Sequence-of-returns risk: the plan is re-run hundreds of times with randomized yearly returns.
-- **Settings** — simulations per run, target confidence, and annual volatility (std dev %) per
-  account type (reference: global equities ~15–18%, bond-heavy ~5–8%, single stock 30%+). Each year
-  every account *type* gets one shared shock, so all your equity funds move together.
-- **Results** — **success rate** (share of paths surviving to your end age), median / p10 / p90
-  final net worth, the typical depletion age of failing paths, a **percentile fan chart** of net
-  worth, and a **final-net-worth distribution**.
-- **Safe retirement age** — the earliest retirement age whose success rate meets your target
-  confidence, with a one-click apply button. Heavy computations are debounced and run in the
-  background.
 
 ## 🔀 What-if / Switch
 Compare **selling one holding and reinvesting the net into another**. Pick a source holding and how
-much to sell, a target holding, each one's expected growth, and a horizon. The tool pays the tax up
+much to sell, a target holding, each one's expected growth, and a horizon. **Properties** work on
+both sides: plan properties appear as sources (growth = appreciation + rent yield, total return), and
+a **custom 🏠 property** source/target adds rent yield, purchase costs (מס רכישה + fees, lost up
+front) and sale tax on the gain (מס שבח; 0 = exempt) — so "sell ETF, buy a flat" and "sell the flat,
+buy ETFs" are both one dropdown away. The tool pays the tax up
 front (capital gains, or full Section-102 tax for a grant), reinvests the net, and charts **Keep vs
 Switch** over time — with a crossover year and verdict. Toggle "account for capital-gains tax at the
 horizon" for a fair after-tax comparison (a kept grant is taxed at sale too). Helps you avoid switching

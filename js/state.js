@@ -77,8 +77,8 @@
       whatif: {
         sourceId: "", sellPct: 100, sourceGrowth: null,
         targetId: "", targetGrowth: null, years: 20, afterTax: true,
-        customSource: { kind: "stock", name: "Custom source", value: 200000, costBasis: 100000, capGainsRate: 25, growth: 7, currency: "USD", sharePrice: 100, vestedShares: 500, grantBasisUsd: 40, ordinaryTaxRate: 47 },
-        customTarget: { kind: "stock", name: "Custom target", growth: 8, capGainsRate: 25 },
+        customSource: { kind: "stock", name: "Custom source", value: 200000, costBasis: 100000, capGainsRate: 25, growth: 7, currency: "USD", sharePrice: 100, vestedShares: 500, grantBasisUsd: 40, ordinaryTaxRate: 47, rentYieldPct: 3 },
+        customTarget: { kind: "stock", name: "Custom target", growth: 8, capGainsRate: 25, rentYieldPct: 3, purchaseCostPct: 8 },
       },
 
       tracker: { months: [], years: [] },
@@ -192,6 +192,9 @@
       // mortgage payments to outgoings — but property equity is NOT part of
       // the liquid/FIRE-eligible pot (you can't spend the house).
       realEstate: {
+        // When false the whole tab is a pure what-if simulator — nothing here
+        // touches net worth, income, spending, or survival checks.
+        includeInPlan: true,
         properties: [],
         loans: [],
         // Rate scenario for variable tracks: prime drifts by primeChangePp
@@ -207,6 +210,9 @@
         // When true, retirement projections use the fixed FIRE monthly spend
         // above instead of your real categories/steps. Default false = use real.
         useHeadlineSpending: false,
+        // Show the mortgage payment as a (read-only) item in the spending
+        // view — display only; the cashflow math always pays the mortgage.
+        showMortgage: true,
         // Named category lists. Each category belongs to one list (listId); the
         // active list drives projections & the tracker, and steps can switch
         // the plan to a different list from a given age.
@@ -379,8 +385,8 @@
     if (!s.meta.theme) s.meta.theme = "light";
     if (!s.live) s.live = { corsProxy: "" };
     if (!s.whatif) s.whatif = { sourceId: "", sellPct: 100, sourceGrowth: null, targetId: "", targetGrowth: null, years: 20, afterTax: true };
-    if (!s.whatif.customSource) s.whatif.customSource = { kind: "stock", name: "Custom source", value: 200000, costBasis: 100000, capGainsRate: 25, growth: 7, currency: "USD", sharePrice: 100, vestedShares: 500, grantBasisUsd: 40, ordinaryTaxRate: 47 };
-    if (!s.whatif.customTarget) s.whatif.customTarget = { kind: "stock", name: "Custom target", growth: 8, capGainsRate: 25 };
+    s.whatif.customSource = Object.assign({ kind: "stock", name: "Custom source", value: 200000, costBasis: 100000, capGainsRate: 25, growth: 7, currency: "USD", sharePrice: 100, vestedShares: 500, grantBasisUsd: 40, ordinaryTaxRate: 47, rentYieldPct: 3 }, s.whatif.customSource || {});
+    s.whatif.customTarget = Object.assign({ kind: "stock", name: "Custom target", growth: 8, capGainsRate: 25, rentYieldPct: 3, purchaseCostPct: 8 }, s.whatif.customTarget || {});
     if (!s.tracker) s.tracker = { months: [], years: [] };
     if (!Array.isArray(s.tracker.months)) s.tracker.months = [];
     if (!Array.isArray(s.tracker.years)) s.tracker.years = [];
@@ -402,6 +408,8 @@
     if (!s.realEstate) s.realEstate = { properties: [], loans: [] };
     if (!Array.isArray(s.realEstate.properties)) s.realEstate.properties = [];
     if (!Array.isArray(s.realEstate.loans)) s.realEstate.loans = [];
+    if (s.realEstate.includeInPlan == null) s.realEstate.includeInPlan = true;
+    if (s.spending.showMortgage == null) s.spending.showMortgage = true;
     s.realEstate.scenario = Object.assign({}, d.realEstate.scenario, s.realEstate.scenario || {});
     s.realEstate.loans.forEach((l) => {
       if (!l.track) l.track = l.cpiLinked ? "fixed_cpi" : "fixed";

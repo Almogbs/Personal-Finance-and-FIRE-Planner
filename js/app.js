@@ -223,7 +223,6 @@ function promptGoogleLogin() {
     ["projections", "📈 Projections"],
     ["predictions", "🎯 Predictions"],
     ["fire", "🔥 FIRE"],
-    ["montecarlo", "🎲 Monte Carlo"],
     ["whatif", "🔀 What-if / Switch"],
     ["data", "💾 Save / Load"],
   ];

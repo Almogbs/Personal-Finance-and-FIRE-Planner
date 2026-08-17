@@ -73,6 +73,13 @@
   ];
   function kindLabel(k) { const f = KINDS.find((x) => x[0] === k); return f ? f[1] : k; }
 
+  // Current combined monthly mortgage payment — shown as a read-only spending
+  // item when the mortgage is part of the plan and the user hasn't opted out.
+  function mortgageMonthlyNow(st) {
+    if (!st.realEstate || st.realEstate.includeInPlan === false) return 0;
+    return (st.realEstate.loans || []).reduce((s, l) => s + FIRE.engine.loanSchedule(l, st.assumptions.inflation, st.realEstate.scenario || {}).payNow, 0);
+  }
+
   // A monthly/yearly frequency dropdown bound to an array item's `freq` field.
   function freqSelect(arr, id, freq) {
     return '<select data-arr="' + arr + '" data-id="' + id + '" data-field="freq" data-type="text">' +
@@ -794,6 +801,9 @@
           '<div class="toolbar"><button class="btn small" data-action="add-cat">+ Add category</button></div>' +
           '<div class="table-wrap"><table class="grid"><thead><tr><th>Name</th><th>Amount</th><th>Per</th><th>Start age</th><th>End age</th><th>Growth %</th><th>Inflate</th><th></th></tr></thead><tbody id="sp-cats"></tbody></table></div>' +
           '<div id="sp-total" class="callout"></div>' +
+          ((st.realEstate && (st.realEstate.loans || []).length && st.realEstate.includeInPlan !== false)
+            ? '<div style="margin-top:10px">' + toggle("Show the mortgage payment as a spending item here (it's always paid in the cashflow either way)", "spending.showMortgage", { remount: 1 }) + "</div>"
+            : "") +
         "</div>" +
         '<div class="panel"><h3>Step changes (differential spending)</h3>' +
           '<div class="toolbar"><button class="btn small" data-action="add-step">+ Add step</button></div>' +
@@ -822,6 +832,14 @@
           '<td><button class="btn danger small" data-action="del-cat" data-id="' + c.id + '">✕</button></td>' +
           "</tr>";
       }).join("") || '<tr><td colspan="8" class="hint" style="text-align:center">This list is empty — click “+ Add category”.</td></tr>';
+      // Read-only mortgage row (driven by the Mortgage tab; opt-out below).
+      const mortNow = st.spending.showMortgage !== false ? mortgageMonthlyNow(st) : 0;
+      if (mortNow > 0) {
+        el.querySelector("#sp-cats").innerHTML +=
+          '<tr class="trk-subtotal"><td>🏠 Mortgage <span class="hint">(auto — edit on the Mortgage tab)</span></td>' +
+          "<td><b>" + money(mortNow) + "</b></td><td>/ month</td>" +
+          '<td colspan="4" class="hint">until payoff · follows the rate scenario &amp; CPI linkage</td><td></td></tr>';
+      }
     },
     renderSteps(el) {
       const st = S();
@@ -850,14 +868,19 @@
       const st = S();
       const age = Math.round(st.profile.currentAge);
       const bd = FIRE.engine.spendBreakdown(st, age);
-      C.pie(el.querySelector("#sp-pie"), { doughnut: true, slices: bd.map((b) => ({ name: b.name, value: b.monthly })) });
+      const mortNow = st.spending.showMortgage !== false ? mortgageMonthlyNow(st) : 0;
+      const slices = bd.map((b) => ({ name: b.name, value: b.monthly }));
+      if (mortNow > 0) slices.push({ name: "🏠 Mortgage", value: mortNow, color: "#9c755f" });
+      C.pie(el.querySelector("#sp-pie"), { doughnut: true, slices });
 
       // Total of all active categories at the current age (monthly-equivalent).
       const totMonthly = bd.reduce((s, b) => s + b.monthly, 0);
       const totEl = el.querySelector("#sp-total");
       if (totEl) {
         totEl.innerHTML = "<b>Total spending now:</b> " + money(totMonthly) + "/month · " + money(totMonthly * 12) + "/year" +
-          " (across " + bd.length + " active " + (bd.length === 1 ? "category" : "categories") + "). Yearly items are shown as their monthly-equivalent here.";
+          " (across " + bd.length + " active " + (bd.length === 1 ? "category" : "categories") + ")." +
+          (mortNow > 0 ? " Plus <b>🏠 mortgage " + money(mortNow) + "/mo</b> → <b>" + money(totMonthly + mortNow) + "/mo</b> all-in." : "") +
+          " Yearly items are shown as their monthly-equivalent here.";
       }
       const p = FIRE.engine.project(st);
       C.line(el.querySelector("#sp-line"), {
@@ -1593,7 +1616,7 @@
       const isCustomTgt = st.whatif.targetId === "__custom__";
       el.innerHTML =
         "<h1>What-if / Switch a holding</h1>" +
-        '<p class="lead">See what happens if you <b>sell one holding and reinvest the net into another</b>. It pays the tax up front, then compares the two paths under each holding\'s growth — so you can judge whether a faster-growing target beats the tax drag and a slower one. Use <b>Custom</b> to model a holding you don\'t own yet (e.g. a future RSU grant).</p>' +
+        '<p class="lead">See what happens if you <b>sell one holding and reinvest the net into another</b>. It pays the tax up front, then compares the two paths under each holding\'s growth — so you can judge whether a faster-growing target beats the tax drag and a slower one. Use <b>Custom</b> to model something you don\'t own yet — a future RSU grant or a <b>🏠 property</b> (appreciation + rent yield, purchase costs, מס שבח). Properties from the Mortgage tab appear as sources too (growth shown as total return incl. rent; attached mortgages aren\'t netted here).</p>' +
         '<div class="grid-2">' +
         '<div class="panel"><h3>Sell (source)</h3>' +
           '<div class="control"><label>Holding to sell</label><div class="ctl-row"><select data-whatif="source" data-type="text">' + opts(st.whatif.sourceId) + "</select></div></div>" +
@@ -1617,13 +1640,32 @@
     customEditor(path, def, role) {
       const base = "whatif." + path;
       const kindSel = '<div class="control"><label>Type</label><div class="ctl-row"><select data-path="' + base + '.kind" data-type="text" data-remount="1">' +
-        [["stock", "Stock / ETF"], ["rsu", "RSU / grant"]].map((k) => '<option value="' + k[0] + '"' + (def.kind === k[0] ? " selected" : "") + ">" + k[1] + "</option>").join("") + "</select></div></div>";
+        [["stock", "Stock / ETF"], ["rsu", "RSU / grant"], ["property", "🏠 Property / real estate"]].map((k) => '<option value="' + k[0] + '"' + (def.kind === k[0] ? " selected" : "") + ">" + k[1] + "</option>").join("") + "</select></div></div>";
       const nameF = '<div class="control"><label>Name</label><div class="ctl-row"><input data-path="' + base + '.name" data-type="text" value="' + escapeHtml(def.name || "") + '"></div></div>';
       if (role === "target") {
+        if (def.kind === "property") {
+          // Buying a property: purchase costs eat into the invested amount;
+          // growth = appreciation + net rent yield; sale tax on gain at exit.
+          return kindSel + nameF +
+            ctl("Appreciation / yr", base + ".growth", { min: -5, max: 15, step: 0.1, suffix: "%" }) +
+            ctl("Net rent yield / yr", base + ".rentYieldPct", { min: 0, max: 10, step: 0.1, suffix: "%" }) +
+            ctl("Purchase costs (מס רכישה + fees)", base + ".purchaseCostPct", { min: 0, max: 15, step: 0.5, suffix: "%" }) +
+            ctl("Sale tax on gain (מס שבח; 0 = exempt)", base + ".capGainsRate", { min: 0, max: 50, step: 1, suffix: "%" }) +
+            '<p class="hint">Total return = appreciation + rent yield. Purchase costs are lost up front — that\'s the hurdle the property must beat. Mortgage leverage isn\'t modeled here (compare cash-vs-cash).</p>';
+        }
         // Buying into the target: only growth & cap-gains matter.
         return kindSel + nameF +
           ctl("Expected growth / yr", base + ".growth", { min: -5, max: 25, step: 0.1, suffix: "%" }) +
           ctl("Capital-gains tax %", base + ".capGainsRate", { min: 0, max: 50, step: 1, suffix: "%" });
+      }
+      if (def.kind === "property") {
+        // Selling a property you own (hypothetically or really).
+        return kindSel + nameF +
+          ctl("Market value", base + ".value", { min: 0, max: 20000000, step: 10000 }) +
+          ctl("What you paid (basis)", base + ".costBasis", { min: 0, max: 20000000, step: 10000 }) +
+          ctl("Appreciation / yr", base + ".growth", { min: -5, max: 15, step: 0.1, suffix: "%" }) +
+          ctl("Net rent yield / yr", base + ".rentYieldPct", { min: 0, max: 10, step: 0.1, suffix: "%" }) +
+          ctl("Sale tax on gain (מס שבח; 0 = exempt)", base + ".capGainsRate", { min: 0, max: 50, step: 1, suffix: "%" });
       }
       if (def.kind === "rsu") {
         return kindSel + nameF +
@@ -1659,7 +1701,8 @@
       if (out) out.innerHTML =
         '<div class="pay-block"><div class="pay-row"><span>Sell ' + st.whatif.sellPct + "% of <b>" + escapeHtml(sc.src.name) + "</b></span><span>" + money(sc.sellGross) + "</span></div>" +
         '<div class="pay-row"><span>Tax to sell now</span><span>−' + money(sc.taxNow) + "</span></div>" +
-        '<div class="pay-row pay-sum"><span>Net reinvested into ' + escapeHtml(sc.tgt.name) + "</span><span>" + money(sc.netReinvest) + "</span></div></div>" +
+        (sc.purchaseCost > 0 ? '<div class="pay-row"><span>Purchase costs (מס רכישה + fees)</span><span>−' + money(sc.purchaseCost) + "</span></div>" : "") +
+        '<div class="pay-row pay-sum"><span>' + (sc.purchaseCost > 0 ? "Actually invested in " : "Net reinvested into ") + escapeHtml(sc.tgt.name) + "</span><span>" + money(sc.purchaseCost > 0 ? sc.invested : sc.netReinvest) + "</span></div></div>" +
         "<p>Source grows " + sc.srcG.toFixed(1) + "%/yr, target " + sc.tgtG.toFixed(1) + "%/yr" + (at ? ", both shown after capital-gains tax at the horizon" : ", before any exit tax") + ".</p>" +
         "<p>" + verdict + "</p>";
 
@@ -1680,12 +1723,12 @@
     },
   };
 
-  /* ============================ MONTE CARLO ============================== */
+  /* ================= MONTE CARLO (section inside 🔥 FIRE) ================= */
   const montecarlo = {
     mount(el) {
       el.innerHTML =
-        "<h1>🎲 Monte Carlo</h1>" +
-        '<p class="lead">Fixed-return projections hide <b>sequence-of-returns risk</b> — a crash early in retirement hurts far more than the same crash later. This page re-runs your full plan hundreds of times with randomized yearly returns (per account type) and reports how often it survives.</p>' +
+        '<h1 style="font-size:22px;margin-top:26px">🎲 Monte Carlo</h1>' +
+        '<p class="lead">Fixed-return projections hide <b>sequence-of-returns risk</b> — a crash early in retirement hurts far more than the same crash later. This section re-runs your full plan hundreds of times with randomized yearly returns (per account type) and reports how often it survives.</p>' +
         '<div class="grid-2">' +
         '<div class="panel"><h3>Simulation settings</h3>' +
           ctl("Simulations per run", "assumptions.mc.sims", { min: 100, max: 2000, step: 50, type: "int" }) +
@@ -1797,7 +1840,10 @@
       const st = S();
       el.innerHTML =
         "<h1>🏠 Mortgage &amp; Real Estate</h1>" +
-        '<p class="lead">A mortgage <b>simulator with Israeli tracks (מסלולים)</b> — build the mix (קל"צ / קבועה צמודה / פריים / משתנה כל 5), pick Spitzer or equal-principal (קרן שווה), stress the rates, and watch the payment path. <b>Equity (value − debt) counts toward your net worth</b>, rent adds to income and payments to outgoings in every projection — but the house is never counted as liquid/FIRE-spendable money.</p>' +
+        '<p class="lead">A mortgage <b>simulator with Israeli tracks (מסלולים)</b> — build the mix (קל"צ / קבועה צמודה / פריים / משתנה כל 5), pick Spitzer or equal-principal (קרן שווה), stress the rates, and watch the payment path. It works both for a mortgage you <b>have</b> and one you\'re only <b>considering</b>.</p>' +
+        '<div class="panel" style="padding:12px 18px">' +
+          toggle("<b>Include in my plan</b> — equity in net worth, rent as income, payments as outgoings, all projections & survival checks. Untick to use this tab as a pure what-if simulator that touches nothing.", "realEstate.includeInPlan") +
+        "</div>" +
         '<div class="metric-grid" id="re-metrics"></div>' +
         '<div class="panel"><h3>Properties</h3>' +
           '<div class="toolbar"><button class="btn small" data-action="add-property">+ Add property</button></div>' +
@@ -1874,28 +1920,42 @@
     update(el) {
       const st = S();
       const p = FIRE.engine.project(st);
-      const real = st.assumptions.realMode;
-      const adj = (v, k) => (real ? v / Math.pow(1 + st.assumptions.inflation / 100, k) : v);
+      const inPlan = st.realEstate.includeInPlan !== false;
       const r0 = p.rows[0];
 
-      // Metric cards (today's values from the plan, first-year cashflow).
-      const snap = p.snapshot;
+      // Everything below is computed from the tab's own simulation, so it
+      // works identically whether or not the mortgage is part of the plan.
       const scenario = st.realEstate.scenario || {};
-      let rentNow = 0;
-      (st.realEstate.properties || []).forEach((pr) => (rentNow += pr.rentMonthly || 0));
+      const props = st.realEstate.properties || [];
+      const loansArr = st.realEstate.loans || [];
+      let reValue = 0, reDebt = 0, rentNow = 0;
+      props.forEach((pr) => { reValue += pr.value || 0; rentNow += pr.rentMonthly || 0; });
+      loansArr.forEach((l) => (reDebt += l.principal || 0));
       const scheds = {};
-      let payNow = 0, payPeak = 0;
-      (st.realEstate.loans || []).forEach((l) => {
+      let payNow = 0, totalPaid = 0, totalInterest = 0, payoffMonths = 0;
+      loansArr.forEach((l) => {
         const s = FIRE.engine.loanSchedule(l, st.assumptions.inflation, scenario);
         scheds[l.id] = s;
         payNow += s.payNow;
+        totalPaid += s.totalPaid;
+        totalInterest += s.totalInterest;
+        if (s.months > payoffMonths) payoffMonths = s.months;
+      });
+      // Rent collected until the last track is paid off (with rent growth).
+      const payoffYears = Math.ceil(payoffMonths / 12);
+      let rentUntilPayoff = 0;
+      props.forEach((pr) => {
+        for (let y = 0; y < payoffYears; y++) rentUntilPayoff += (pr.rentMonthly || 0) * 12 * Math.pow(1 + (pr.rentGrowthPct || 0) / 100, y);
       });
       el.querySelector("#re-metrics").innerHTML =
-        card("Property value", money(snap.reValue), (st.realEstate.properties || []).length + " propert" + ((st.realEstate.properties || []).length === 1 ? "y" : "ies")) +
-        card("Mortgage debt", money(snap.reDebt), (st.realEstate.loans || []).length + " track(s)") +
-        card("Net equity", money(snap.reEquity), "counts toward net worth") +
-        card("Rent", money(rentNow) + "/mo", "added to income") +
-        card("Mortgage payments", money(payNow) + "/mo", "now — see peak below");
+        card("Property value", money(reValue), props.length + " propert" + (props.length === 1 ? "y" : "ies")) +
+        card("Mortgage debt", money(reDebt), loansArr.length + " track(s)") +
+        card("Total repayment", money(totalPaid), "principal " + money(reDebt) + " + interest " + money(totalInterest)) +
+        card("…of which interest", money(totalInterest), reDebt > 0 ? ((totalInterest / reDebt) * 100).toFixed(0) + "% of the principal" : "") +
+        card("Rent until payoff", money(rentUntilPayoff), payoffYears + " years of rent (with growth)") +
+        card("Net cost after rent", money(totalPaid - rentUntilPayoff), "total repayment − rent collected") +
+        card("Net equity", money(reValue - reDebt), inPlan ? "counts toward net worth" : '<span class="bad">simulation only — not in the plan</span>') +
+        card("Mortgage payments", money(payNow) + "/mo", "now — see peak per track below");
 
       // Per-track computed cells.
       (st.realEstate.loans || []).forEach((l) => {
@@ -1949,29 +2009,42 @@
         C.line(payChart, { labels, series });
       }
 
-      // Value / debt / equity lines.
+      // Value / debt / equity + rent-vs-payments — computed locally from the
+      // simulation so they render even in simulation-only mode.
+      const real = st.assumptions.realMode;
+      const adj = (v, k) => (real ? v / Math.pow(1 + st.assumptions.inflation / 100, k) : v);
+      const y0 = FIRE.state.refDate(st).getFullYear();
+      const H = Math.max(payoffYears + 1, 30);
+      const yearsLbl = Array.from({ length: H }, (_, i) => y0 + i);
+      const valAt = (i) => props.reduce((s, pr) => s + (pr.value || 0) * Math.pow(1 + (pr.growthPct || 0) / 100, i), 0);
+      const debtAt = (i) => loansArr.reduce((s, l) => s + ((scheds[l.id].balByYear || [])[i] != null ? scheds[l.id].balByYear[i] : 0), 0);
+      const rentAt = (i) => props.reduce((s, pr) => s + (pr.rentMonthly || 0) * 12 * Math.pow(1 + (pr.rentGrowthPct || 0) / 100, i), 0);
+      const payAt = (i) => loansArr.reduce((s, l) => s + (((scheds[l.id].payByYear || [])[i] || 0) * 12), 0);
       C.line(el.querySelector("#re-line"), {
-        labels: p.rows.map((r) => r.year),
+        labels: yearsLbl,
         series: [
-          { name: "Property value", data: p.rows.map((r) => adj(r.reValue, r.k)), color: "#4e79a7" },
-          { name: "Debt", data: p.rows.map((r) => adj(r.reDebt, r.k)), color: "#e15759" },
-          { name: "Equity", data: p.rows.map((r) => adj(r.reEquity, r.k)), color: "#59a14f" },
+          { name: "Property value", data: yearsLbl.map((_, i) => adj(valAt(i), i)), color: "#4e79a7" },
+          { name: "Debt", data: yearsLbl.map((_, i) => adj(debtAt(i), i)), color: "#e15759" },
+          { name: "Equity", data: yearsLbl.map((_, i) => adj(valAt(i) - debtAt(i), i)), color: "#59a14f" },
         ],
       });
-      // Rent vs payments bars.
       C.bar(el.querySelector("#re-cash"), {
-        labels: p.rows.map((r) => r.year),
+        labels: yearsLbl,
         series: [
-          { name: "Rent /yr", data: p.rows.map((r) => adj(r.rentIncome, r.k)), color: "#8cd17d" },
-          { name: "Mortgage /yr", data: p.rows.map((r) => adj(r.mortgagePay, r.k)), color: "#9c755f" },
+          { name: "Rent /yr", data: yearsLbl.map((_, i) => adj(rentAt(i), i)), color: "#8cd17d" },
+          { name: "Mortgage /yr", data: yearsLbl.map((_, i) => adj(payAt(i), i)), color: "#9c755f" },
         ],
       });
 
       // Impact summary.
       const imp = el.querySelector("#re-impact");
       if (imp) {
-        if (!(st.realEstate.properties || []).length && !(st.realEstate.loans || []).length) {
-          imp.innerHTML = '<p class="hint">Nothing modeled yet. Adding a property/mortgage feeds equity into net worth, rent into income, and payments into spending across the Dashboard, Projections, and survival checks.</p>';
+        if (!props.length && !loansArr.length) {
+          imp.innerHTML = '<p class="hint">Nothing modeled yet. Add a property/mortgage above — with “Include in my plan” ticked it feeds equity into net worth, rent into income, and payments into spending across the Dashboard, Projections, and survival checks; unticked it\'s a pure simulator.</p>';
+        } else if (!inPlan) {
+          imp.innerHTML =
+            '<div class="callout"><b>Simulation only</b> — this mortgage/property is <b>not</b> part of your plan (net worth, spending, and survival are unaffected). Tick “Include in my plan” above to commit it and see the impact here.</div>' +
+            "<p>If committed: payments would start at <b>" + money(payNow) + "/mo</b>, total repayment <b>" + money(totalPaid) + "</b> (interest " + money(totalInterest) + "), offset by <b>" + money(rentUntilPayoff) + "</b> rent until payoff ~<b>" + (y0 + payoffYears) + "</b>.</p>";
         } else {
           const lastPay = p.rows.filter((r) => r.mortgagePay > 1).slice(-1)[0];
           imp.innerHTML =
@@ -2102,11 +2175,15 @@ mount(el) {
           "</div>" +
         "</div>" +
         '<div class="panel"><h3>Sensitivity: years to FIRE target vs return</h3><canvas id="fire-sens" height="240"></canvas>' +
-          '<p class="hint">For a range of expected taxable / money-market returns, the years until your projected non-pension assets reach the fixed-spend FIRE target above.</p></div>';
+          '<p class="hint">For a range of expected taxable / money-market returns, the years until your projected non-pension assets reach the fixed-spend FIRE target above.</p></div>' +
+        '<div id="fire-mc"></div>';
+      montecarlo.mount(el.querySelector("#fire-mc"));
       this.update(el);
     },
     update(el) {
       const st = S();
+      const mcHost = el.querySelector("#fire-mc");
+      if (mcHost && mcHost.firstChild) montecarlo.update(mcHost);
       const p = FIRE.engine.project(st);
       const t = p.targets;
       const annual = st.spending.fireMonthly * 12;
@@ -2194,7 +2271,7 @@ mount(el) {
   };
 
   FIRE.ui = {
-    pages: { dashboard, accounts, assumptions, income, spending, fire, montecarlo, tracker, pension, mortgage, projections, predictions, whatif, data },
+    pages: { dashboard, accounts, assumptions, income, spending, fire, tracker, pension, mortgage, projections, predictions, whatif, data },
     money, pct, escapeHtml, fmtAgeYM, ageAtYearEnd, ageAtYearStart, yearAgeLabel, yearForAge, eventLabel,
   };
 })();

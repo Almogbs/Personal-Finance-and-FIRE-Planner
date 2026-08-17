@@ -3,6 +3,22 @@
 All notable changes are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## 1.26.0
+
+- **Monte Carlo moved into the 🔥 FIRE tab** (own nav entry removed) — all risk analysis now lives
+  with the rest of the FIRE maths.
+- **Mortgage payment shows up in Spending** — a read-only 🏠 row in the categories table, a slice in
+  the mix doughnut, and an "all-in" monthly total; opt-out toggle (display only — the cashflow always
+  pays the mortgage).
+- **Mortgage tab works as a pure what-if simulator** — new **"Include in my plan"** toggle: unticked,
+  nothing touches net worth/income/spending/survival, while all simulator outputs still render. New
+  **deal-economics cards**: total repayment (principal + interest), interest as % of principal, rent
+  collected until payoff, and **net cost after rent**. The value/debt/equity and rent-vs-payments
+  charts are computed from the tab's own simulation, so they work in both modes.
+- **What-if supports properties** — plan properties appear as sell-side holdings (growth = appreciation
+  + rent yield), and a custom **🏠 property** source/target models rent yield, purchase costs
+  (מס רכישה + fees, shown as an up-front deduction in the result), and sale tax on the gain (מס שבח).
+
 ## 1.25.0
 
 - **🎲 New Monte Carlo tab** — sequence-of-returns risk analysis: N randomized runs of the full plan

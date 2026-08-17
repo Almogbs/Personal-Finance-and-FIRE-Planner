@@ -100,10 +100,13 @@
     });
 
     // Real-estate equity (value − remaining mortgage principal) counts in
-    // net worth, but not in liquid / non-pension financial assets.
+    // net worth, but not in liquid / non-pension financial assets. Skipped
+    // entirely when the Mortgage tab is in simulation-only mode.
     let reValue = 0, reDebt = 0;
-    (((state.realEstate || {}).properties) || []).forEach((p) => (reValue += p.value || 0));
-    (((state.realEstate || {}).loans) || []).forEach((l) => (reDebt += l.principal || 0));
+    if (!(state.realEstate && state.realEstate.includeInPlan === false)) {
+      (((state.realEstate || {}).properties) || []).forEach((p) => (reValue += p.value || 0));
+      (((state.realEstate || {}).loans) || []).forEach((l) => (reDebt += l.principal || 0));
+    }
     total += reValue - reDebt;
 
     return { usdIls, accounts, total, liquid, nonPension, pension, reValue, reDebt, reEquity: reValue - reDebt, grants: gv };
@@ -329,12 +332,14 @@
     // Real estate: properties appreciate & pay rent; mortgages amortize
     // monthly (Spitzer), optionally CPI-linked. Equity counts in net worth
     // but is never liquid/FIRE-eligible; rent adds to income, payments to
-    // outgoings.
-    const props = ((state.realEstate && state.realEstate.properties) || []).map((p) => ({
+    // outgoings. When the Mortgage tab is in simulation-only mode
+    // (includeInPlan = false) none of this touches the plan.
+    const reOn = !(state.realEstate && state.realEstate.includeInPlan === false);
+    const props = (reOn && ((state.realEstate && state.realEstate.properties) || []) || []).map((p) => ({
       id: p.id, val: p.value || 0, growth: p.growthPct || 0,
       rent: p.rentMonthly || 0, rentGrowth: p.rentGrowthPct || 0,
     }));
-    const loans = ((state.realEstate && state.realEstate.loans) || []).map((l) => initLoan(l, (state.realEstate || {}).scenario || {}));
+    const loans = (reOn && ((state.realEstate && state.realEstate.loans) || []) || []).map((l) => initLoan(l, (state.realEstate || {}).scenario || {}));
 
     // Coast-FIRE what-if: from `_coastFrom` (exclusive of retirement) stop all
     // new savings — no contributions, no vests, no surplus — income is assumed
@@ -857,6 +862,17 @@
       if (r.gross <= 0) return;
       out.push({ id: "grant-" + g.id, name: g.name + " (grant)", kind: "rsu", value: r.gross, net: r.net, taxNow: r.tax, basis: r.gross, cg: g.capGainsRate || 25, growth: g.expectedGrowthPct || 0, _grant: g, _shares: FIRE.state.vestedSharesOf(state, g) });
     });
+    // Properties that are part of the plan can be a what-if source. Growth is
+    // TOTAL return = appreciation + gross rent yield; sale is modeled tax-free
+    // (single-home מס שבח exemption) and any attached mortgage is ignored here.
+    if (!(state.realEstate && state.realEstate.includeInPlan === false)) {
+      ((state.realEstate && state.realEstate.properties) || []).forEach((p) => {
+        const value = p.value || 0;
+        if (value <= 0) return;
+        const rentYield = value > 0 ? ((p.rentMonthly || 0) * 12 / value) * 100 : 0;
+        out.push({ id: "prop-" + p.id, name: p.name + " (property)", kind: "property", value, net: value, taxNow: 0, basis: value, cg: 0, growth: (p.growthPct || 0) + rentYield });
+      });
+    }
     return out;
   }
 
@@ -864,8 +880,22 @@
   function buildCustom(def, usdIls, role) {
     def = def || {};
     if (role === "target") {
+      if (def.kind === "property") {
+        // Buying a property: purchase costs (מס רכישה, fees) reduce the amount
+        // that actually becomes property; growth = appreciation + net rent
+        // yield; capGainsRate models sale tax on the gain at the horizon
+        // (0 = single-home מס שבח exemption).
+        return { id: "__custom__", name: def.name || "Property", kind: "property", value: 0, net: 0, taxNow: 0, basis: 0, cg: def.capGainsRate || 0, growth: (def.growth || 0) + (def.rentYieldPct || 0), _purchaseCostPct: def.purchaseCostPct || 0 };
+      }
       // Only growth & cap-gains rate matter for the target you buy into.
       return { id: "__custom__", name: def.name || "Custom target", kind: def.kind || "stock", value: 0, net: 0, taxNow: 0, basis: 0, cg: def.capGainsRate || 0, growth: def.growth || 0 };
+    }
+    if (def.kind === "property") {
+      // Selling a property you (hypothetically) own: sale tax on the gain vs
+      // cost basis (0 = exempt); keep-path growth = appreciation + rent yield.
+      const value = def.value || 0, basis = def.costBasis || 0;
+      const taxNow = Math.max(0, value - basis) * (def.capGainsRate || 0) / 100;
+      return { id: "__custom__", name: def.name || "Property", kind: "property", value, net: value - taxNow, taxNow, basis: Math.min(basis, value), cg: def.capGainsRate || 0, growth: (def.growth || 0) + (def.rentYieldPct || 0) };
     }
     if (def.kind === "rsu") {
       const g = { sharePrice: def.sharePrice || 0, vestedShares: def.vestedShares || 0, grantBasisUsd: def.grantBasisUsd || 0, currency: def.currency || "USD", ordinaryTaxRate: def.ordinaryTaxRate || 0, capGainsRate: def.capGainsRate || 25, expectedGrowthPct: def.growth || 0 };
@@ -897,6 +927,10 @@
     const taxNow = src.taxNow * f;
     const netReinvest = src.net * f;
     const srcBasis = src.basis * f;
+    // Buying into a property costs purchase tax/fees up front — only the
+    // remainder becomes the appreciating asset.
+    const purchaseCost = netReinvest * ((tgt._purchaseCostPct || 0) / 100);
+    const invested = netReinvest - purchaseCost;
 
     const rows = [];
     let crossover = null, crossoverAT = null;
@@ -913,13 +947,13 @@
         keep = sellGross * Math.pow(1 + srcG, t);
         keepAT = keep - (src.cg / 100) * Math.max(0, keep - srcBasis);
       }
-      const sw = netReinvest * Math.pow(1 + tgtG, t);
-      const swAT = sw - (tgt.cg / 100) * Math.max(0, sw - netReinvest);
+      const sw = invested * Math.pow(1 + tgtG, t);
+      const swAT = sw - (tgt.cg / 100) * Math.max(0, sw - invested);
       if (crossover == null && sw > keep) crossover = t;
       if (crossoverAT == null && swAT > keepAT) crossoverAT = t;
       rows.push({ t, keep, sw, keepAT, swAT });
     }
-    return { src, tgt, srcG: srcG * 100, tgtG: tgtG * 100, sellGross, taxNow, netReinvest, years, rows, crossover, crossoverAT };
+    return { src, tgt, srcG: srcG * 100, tgtG: tgtG * 100, sellGross, taxNow, netReinvest, purchaseCost, invested, years, rows, crossover, crossoverAT };
   }
 
   /* ---- Earliest FIRE age --------------------------------------------------
