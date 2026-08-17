@@ -39,11 +39,13 @@ function getCloudConfig() {
     }
 
   } catch (e) {
-    console.error("Cloud config error:", e);
+    // Expected when running locally / offline (CORS or no network) — cloud
+    // sync is optional, so stay quiet in the console.
+    console.warn("Cloud config unavailable (offline/local?):", e && e.message);
 
     const status = document.getElementById("cloud-config-status");
     if (status) {
-      status.textContent = "Unable to load cloud configuration.";
+      status.textContent = "Cloud sync unavailable (offline or running locally) — everything else works normally.";
     }
   }
 }
@@ -215,11 +217,13 @@ function promptGoogleLogin() {
     ["income", "💰 Income"],
     ["spending", "🛒 Spending"],
     ["accounts", "🏦 Accounts"],
+    ["mortgage", "🏠 Mortgage & Real Estate"],
     ["pension", "👵 Pension"],
     ["tracker", "🧾 Tracker"],
     ["projections", "📈 Projections"],
     ["predictions", "🎯 Predictions"],
     ["fire", "🔥 FIRE"],
+    ["montecarlo", "🎲 Monte Carlo"],
     ["whatif", "🔀 What-if / Switch"],
     ["data", "💾 Save / Load"],
   ];
@@ -262,6 +266,7 @@ function mountPage() {
   pageEl = document.getElementById("page");
   const page = FIRE.ui.pages[current];
   page.mount(pageEl);
+  refreshNumTooltips();
 
   if (current === "data") {
     initGoogleAuth();
@@ -283,12 +288,18 @@ function mountPage() {
     const snap = p.snapshot;
     const badge = document.getElementById("header-status");
     if (badge) {
+      const togo = st.profile.fireAge - st.profile.currentAge;
+      const togoLbl = togo <= 0 ? "retired 🎉" : FIRE.ui.fmtAgeYM(togo) + " to go";
       badge.innerHTML =
         '<span class="hdr-metric">Net worth <b>' + FIRE.ui.money(snap.total) + "</b></span>" +
-        '<span class="hdr-metric">' + (p.survives ? '<span class="ok">✓ survives to 80</span>' : '<span class="bad">✕ depletes @ ' + p.depletionAge + "</span>") + "</span>";
+        '<span class="hdr-metric">Retire <b>' + FIRE.ui.eventLabel(st, st.profile.fireAge) + "</b></span>" +
+        '<span class="hdr-metric hdr-hide-sm">NW @ retirement <b>' + FIRE.ui.money(p.fireRow ? p.fireRow.total : 0) + "</b></span>" +
+        '<span class="hdr-metric hdr-hide-sm"><b>' + togoLbl + "</b></span>" +
+        '<span class="hdr-metric">' + (p.survives ? '<span class="ok">✓ survives to ' + st.profile.endAge + "</span>" : '<span class="bad">✕ depletes ' + FIRE.ui.eventLabel(st, p.depletionAge) + "</span>") + "</span>";
     }
     const nameEl = document.getElementById("header-name");
     if (nameEl) nameEl.textContent = st.meta.name;
+    applyRealButton();
   }
 
   function go(id) {
@@ -315,15 +326,52 @@ function mountPage() {
         st.accounts = st.accounts.filter((a) => a.id !== el.dataset.id); state.update(() => {}); remountPage(); break;
       }
       case "add-cat": {
-        st.spending.categories.push({ id: state.uid("cat"), name: "New category", freq: "monthly", monthly: 500, startAge: Math.round(st.profile.currentAge), endAge: st.profile.endAge, growthPct: st.spending.growthPct, inflate: true });
+        const lid = FIRE.ui.pages.spending.editListId || st.spending.activeListId;
+        st.spending.categories.push({ id: state.uid("cat"), name: "New category", freq: "monthly", monthly: 500, startAge: Math.round(st.profile.currentAge), endAge: st.profile.endAge, growthPct: st.spending.growthPct, inflate: true, listId: lid });
         state.update(() => {}); remountPage(); break;
       }
       case "del-cat": {
         st.spending.categories = st.spending.categories.filter((c) => c.id !== el.dataset.id); state.update(() => {}); remountPage(); break;
       }
+      case "sp-edit-list": {
+        FIRE.ui.pages.spending.editListId = el.dataset.id; remountPage(); break;
+      }
+      case "add-list": {
+        const l = { id: state.uid("list"), name: "New list" };
+        st.spending.lists = st.spending.lists || [];
+        st.spending.lists.push(l);
+        FIRE.ui.pages.spending.editListId = l.id;
+        state.update(() => {}); remountPage(); break;
+      }
+      case "dup-list": {
+        const src = (st.spending.lists || []).find((l) => l.id === el.dataset.id);
+        if (!src) break;
+        const copy = { id: state.uid("list"), name: src.name + " (copy)" };
+        st.spending.lists.push(copy);
+        state.listCategories(st, src.id).forEach((c) => {
+          const c2 = state.clone(c); c2.id = state.uid("cat"); c2.listId = copy.id;
+          st.spending.categories.push(c2);
+        });
+        FIRE.ui.pages.spending.editListId = copy.id;
+        state.update(() => {}); remountPage(); break;
+      }
+      case "del-list": {
+        const lid = el.dataset.id;
+        const lists = st.spending.lists || [];
+        if (lists.length <= 1) break; // always keep one list
+        const doomed = lists.find((l) => l.id === lid);
+        const n = state.listCategories(st, lid).length;
+        if (!doomed || !confirm('Delete list "' + doomed.name + '" and its ' + n + " categor" + (n === 1 ? "y" : "ies") + "? Steps that pointed to it fall back to the active list.")) break;
+        st.spending.lists = lists.filter((l) => l.id !== lid);
+        st.spending.categories = st.spending.categories.filter((c) => c.listId !== lid);
+        (st.spending.steps || []).forEach((s) => { if (s.listId === lid) s.listId = ""; });
+        if (st.spending.activeListId === lid) st.spending.activeListId = st.spending.lists[0].id;
+        FIRE.ui.pages.spending.editListId = st.spending.activeListId;
+        state.update(() => {}); remountPage(); break;
+      }
       case "add-step": {
         st.spending.steps = st.spending.steps || [];
-        st.spending.steps.push({ id: state.uid("step"), fromAge: Math.round(st.profile.currentAge) + 2, monthly: st.spending.fireMonthly, freq: "monthly", note: "" });
+        st.spending.steps.push({ id: state.uid("step"), fromAge: Math.round(st.profile.currentAge) + 2, mode: "amount", listId: "", monthly: st.spending.fireMonthly, freq: "monthly", note: "" });
         state.update(() => {}); remountPage(); break;
       }
       case "del-step": {
@@ -343,7 +391,33 @@ function mountPage() {
         state.update(() => {}); remountPage(); break;
       }
       case "del-grant": {
-        st.income.grants = (st.income.grants || []).filter((g) => g.id !== el.dataset.id); state.update(() => {}); remountPage(); break;
+        st.income.grants = (st.income.grants || []).filter((g) => g.id !== el.dataset.id);
+        if (FIRE.ui.pages.income.selGrantId === el.dataset.id) FIRE.ui.pages.income.selGrantId = null;
+        state.update(() => {}); remountPage(); break;
+      }
+      case "grant-vests": {
+        const pg = FIRE.ui.pages.income;
+        pg.selGrantId = pg.selGrantId === el.dataset.id ? null : el.dataset.id;
+        remountPage(); break;
+      }
+      case "add-vest": {
+        const g = (st.income.grants || []).find((x) => x.id === el.dataset.grant);
+        if (!g) break;
+        g.vests = g.vests || [];
+        // Default the new event to one year after the latest one (or 1 month
+        // from today), same share count as the previous event.
+        const last = g.vests.slice().sort((a, b) => String(a.date).localeCompare(String(b.date)))[g.vests.length - 1];
+        let d = new Date(FIRE.state.refDate(st));
+        if (last && last.date && !isNaN(new Date(last.date).getTime())) { d = new Date(last.date); d.setFullYear(d.getFullYear() + 1); }
+        else { d.setMonth(d.getMonth() + 1); }
+        g.vests.push({ id: state.uid("vest"), date: d.toISOString().slice(0, 10), shares: last ? (last.shares || 0) : 0 });
+        state.update(() => {}); remountPage(); break;
+      }
+      case "del-vest": {
+        const g = (st.income.grants || []).find((x) => x.id === el.dataset.grant);
+        if (!g) break;
+        g.vests = (g.vests || []).filter((v) => v.id !== el.dataset.id);
+        state.update(() => {}); remountPage(); break;
       }
       case "add-alloc": {
         st.income.allocations = st.income.allocations || [];
@@ -358,6 +432,28 @@ function mountPage() {
         st.meta.theme = st.meta.theme === "dark" ? "light" : "dark";
         state.update(() => {}); applyTheme(); updatePage(); break;
       }
+      case "toggle-real": {
+        st.assumptions.realMode = !st.assumptions.realMode;
+        state.update(() => {}); applyRealButton(); remountPage(); break;
+      }
+      case "add-property": {
+        st.realEstate.properties.push(state.newProperty());
+        state.update(() => {}); remountPage(); break;
+      }
+      case "del-property": {
+        st.realEstate.properties = st.realEstate.properties.filter((p) => p.id !== el.dataset.id);
+        // Loans pointing at the deleted property become standalone.
+        st.realEstate.loans.forEach((l) => { if (l.propertyId === el.dataset.id) l.propertyId = ""; });
+        state.update(() => {}); remountPage(); break;
+      }
+      case "add-loan": {
+        st.realEstate.loans.push(state.newLoan(st));
+        state.update(() => {}); remountPage(); break;
+      }
+      case "del-loan": {
+        st.realEstate.loans = st.realEstate.loans.filter((l) => l.id !== el.dataset.id);
+        state.update(() => {}); remountPage(); break;
+      }
       case "set-fire-age": {
         const age = parseInt(el.dataset.age, 10);
         if (!isNaN(age)) { st.profile.fireAge = age; state.update(() => {}); remountPage(); }
@@ -369,7 +465,7 @@ function mountPage() {
         if (out) {
           if (e.found) {
             const same = e.age === Math.round(st.profile.fireAge);
-            out.innerHTML = '<div class="callout"><b>Earliest retirement age: ' + e.age + "</b> " +
+            out.innerHTML = '<div class="callout"><b>Earliest retirement: age ' + e.age + " — " + FIRE.ui.eventLabel(st, e.age) + "</b> " +
               (e.yearsAway <= 0 ? "(you could retire now 🎉)" : "(" + e.yearsAway + " year" + (e.yearsAway === 1 ? "" : "s") + " away)") +
               " — earliest age at which the plan survives to " + st.profile.endAge + " using your real spending." +
               (same ? " Already set." : ' <button class="btn small" data-action="set-fire-age" data-age="' + e.age + '">Set retirement age to ' + e.age + "</button>") +
@@ -431,8 +527,27 @@ function mountPage() {
       }
       case "trk-month-sel": FIRE.ui.pages.tracker.selMonthId = el.dataset.id; remountPage(); break;
       case "trk-year-sel": FIRE.ui.pages.tracker.selYearId = el.dataset.id; remountPage(); break;
+      case "trk-excl": {
+        // Toggle a category's exclusion for one specific month/year only.
+        const arr = el.dataset.kind === "y" ? st.tracker.years : st.tracker.months;
+        const item = (arr || []).find((x) => x.id === el.dataset.item);
+        if (!item) break;
+        item.excluded = item.excluded || {};
+        if (item.excluded[el.dataset.cat]) delete item.excluded[el.dataset.cat];
+        else item.excluded[el.dataset.cat] = true;
+        state.update(() => {}); remountPage(); break;
+      }
       case "save-baseline": savePredictionBaseline(); break;
       case "record-actual": recordActualYear(); break;
+      case "add-actual-year": {
+        const inp = document.getElementById("pred-add-year");
+        const y = inp && inp.value ? parseInt(inp.value, 10) : NaN;
+        if (isNaN(y)) break;
+        st.predictions.actuals = st.predictions.actuals || {};
+        if (!st.predictions.actuals[y]) st.predictions.actuals[y] = { total: 0, perAccount: {}, savedAt: new Date().toISOString() };
+        FIRE.ui.pages.predictions.selYear = y;
+        state.update(() => {}); remountPage(); break;
+      }
       case "del-actual": {
         const y = el.dataset.year;
         if (st.predictions && st.predictions.actuals) { delete st.predictions.actuals[y]; state.update(() => {}); remountPage(); }
@@ -450,21 +565,15 @@ function mountPage() {
   }
 
   /* ---- Predictions: baseline snapshot & yearly actuals -------------------- */
-  function yearForAge(st, age) {
-    const bs = st.profile.birthDate;
-    if (bs) { const b = new Date(bs); if (!isNaN(b.getTime())) return b.getFullYear() + age; }
-    const now = FIRE.state.refDate(st);
-    return now.getFullYear() + (age - Math.round(st.profile.currentAge));
-  }
   function savePredictionBaseline() {
     const st = state.get();
     const p = FIRE.engine.project(st);
     const nowYear = FIRE.state.refDate(st).getFullYear();
     const years = [];
     p.rows.forEach((r) => {
-      const y = yearForAge(st, r.age);
-      if (y >= nowYear && years.length < 30) {
-        years.push({ year: y, age: r.age, total: Math.round(r.total), perAccount: Object.assign({}, r.perAccount) });
+      // Rows are calendar-year aligned — key the baseline by r.year directly.
+      if (r.year >= nowYear && years.length < 30) {
+        years.push({ year: r.year, age: r.age, total: Math.round(r.total), perAccount: Object.assign({}, r.perAccount) });
       }
     });
     st.predictions.baselineSavedAt = new Date().toISOString();
@@ -543,8 +652,21 @@ function mountPage() {
   }
 
   /* ---- Delegated events --------------------------------------------------- */
+  // Big numbers are hard to read in a bare <input type=number> — mirror a
+  // thousands-separated version into the tooltip.
+  function numTooltip(el) {
+    if (!el || el.type !== "number") return;
+    const n = parseFloat(el.value);
+    el.title = isFinite(n) && Math.abs(n) >= 1000 ? "= " + n.toLocaleString("en-US") : "";
+  }
+  function refreshNumTooltips() {
+    if (!pageEl) return;
+    pageEl.querySelectorAll('input[type="number"]').forEach(numTooltip);
+  }
+
   function onInput(e) {
     const el = e.target;
+    numTooltip(el);
     if (el.id === "cloud-worker-url") { setCloudConfig("cloudApiBaseUrl", el.value); return; }
     if (el.id === "cloud-google-client-id") { setCloudConfig("googleClientId", el.value); return; }
     // Expense-tracker cell (month × category).
@@ -559,6 +681,38 @@ function mountPage() {
       const st = state.get();
       const y = (st.tracker.years || []).find((x) => x.id === el.dataset.trky);
       if (y) { y.entries = y.entries || {}; y.entries[el.dataset.trkyc] = coerce(el, "float"); state.update(() => {}); updatePage(); }
+      return;
+    }
+    // Grant vesting-schedule cell (grant × vest event).
+    if (el.dataset && el.dataset.vestg) {
+      const st = state.get();
+      const g = (st.income.grants || []).find((x) => x.id === el.dataset.vestg);
+      const v = g && (g.vests || []).find((x) => x.id === el.dataset.vestid);
+      if (v) {
+        v[el.dataset.vfield] = el.dataset.vfield === "shares" ? coerce(el, "float") : el.value;
+        state.update(() => {});
+        // Live-refresh everything derived from the schedule (vested count,
+        // 📅 button, past/future tags) plus totals/charts — no manual reload.
+        if (FIRE.ui.pages.income.refreshVestDerived) FIRE.ui.pages.income.refreshVestDerived(pageEl, g.id);
+        updatePage();
+      }
+      return;
+    }
+    // Predictions: manually-entered actual balance (year × account).
+    if (el.dataset && el.dataset.predy) {
+      const st = state.get();
+      const y = el.dataset.predy;
+      st.predictions.actuals = st.predictions.actuals || {};
+      const act = st.predictions.actuals[y] || (st.predictions.actuals[y] = { total: 0, perAccount: {}, savedAt: new Date().toISOString() });
+      act.perAccount = act.perAccount || {};
+      if (el.value === "") delete act.perAccount[el.dataset.predacc];
+      else act.perAccount[el.dataset.predacc] = coerce(el, "float");
+      act.total = Object.keys(act.perAccount).reduce((s, k) => s + (act.perAccount[k] || 0), 0);
+      act.savedAt = new Date().toISOString();
+      state.update(() => {});
+      // In-place refresh so the input keeps focus while typing.
+      FIRE.ui.pages.predictions.refreshLight(pageEl);
+      updateHeader();
       return;
     }
     if (el.dataset && el.dataset.path) {
@@ -610,7 +764,13 @@ function mountPage() {
       const st = state.get();
       const arr = getArr(st, el.dataset.arr);
       const item = arr && arr.find((x) => x.id === el.dataset.id);
-      if (item) { item[el.dataset.field] = el.value; state.update(() => {}); remountPage(); }
+      if (item) {
+        item[el.dataset.field] = el.value;
+        // Picking a list on a spending step implies "Use list" mode — the
+        // select is always clickable, no need to switch the mode first.
+        if (el.dataset.arr === "spending.steps" && el.dataset.field === "listId" && el.value) item.mode = "list";
+        state.update(() => {}); remountPage();
+      }
       return;
     }
     // Path-bound selects (e.g. default allocation account) -> update, no remount.
@@ -649,6 +809,10 @@ function mountPage() {
     const btn = document.getElementById("btn-theme");
     if (btn) btn.textContent = t === "dark" ? "☀️ Light" : "🌙 Dark";
   }
+  function applyRealButton() {
+    const btn = document.getElementById("btn-real");
+    if (btn) btn.textContent = state.get().assumptions.realMode ? "₪ Real (today's)" : "₪ Nominal";
+  }
 
   /* ---- Boot --------------------------------------------------------------- */
   async function init() {
@@ -670,6 +834,9 @@ function mountPage() {
     // Header quick buttons
     const themeBtn = document.getElementById("btn-theme");
     if (themeBtn) themeBtn.addEventListener("click", () => handleAction("toggle-theme", themeBtn));
+    const realBtn = document.getElementById("btn-real");
+    if (realBtn) realBtn.addEventListener("click", () => handleAction("toggle-real", realBtn));
+    applyRealButton();
   }
 
   FIRE.app = { init, go, updatePage, remountPage };

@@ -50,6 +50,7 @@
   function defaultState() {
     // Generic, anonymous demo plan (no personal data). Load your own JSON via
     // Save/Load → "Load from file" to use your real numbers.
+    const defaultListId = uid("list");
     const accounts = [
       { id: uid("acc"), name: "Checking", group: "Bank", kind: "cash", currency: "ILS", balance: 20000, expectedReturn: 0, monthlyContribution: 0, contributionGrowthPct: 0, liquid: true, includeInFire: true, costBasis: 20000, capGainsRate: 0, accessAge: 0, feeDeposit: 0, feeBalance: 0, notes: "" },
       { id: uid("acc"), name: "Savings / money market", group: "Bank", kind: "money_market", currency: "ILS", balance: 80000, expectedReturn: 3.5, monthlyContribution: 0, contributionGrowthPct: 0, liquid: true, includeInFire: true, costBasis: 80000, capGainsRate: 25, accessAge: 0, feeDeposit: 0, feeBalance: 0, notes: "" },
@@ -116,19 +117,48 @@
         // access age / when not annuitized, regardless of position.
         withdrawalOrder: ["cash", "money_market", "taxable", "rsu", "study_fund", "custom", "pension"],
         pensionMode: "annuity",
-        pensionEntitlingCeiling: 9430,
-        pensionExemptionPct: 52,
+        pensionEntitlingCeiling: 9430, // תקרת קצבה מזכה, ₪/mo (2025–2026)
+        // Statutory exemption schedule (Amendment 190, rescheduled): 52% ≤2024,
+        // 57% 2025, 57.5% 2026, 62.5% 2027, 67% from 2028. When auto is on the
+        // engine picks the % for the year the pension is drawn; the manual %
+        // below is used only when auto is off.
+        pensionExemptionAuto: true,
+        pensionExemptionPct: 57.5,
+        // The exemption (קיבוע זכויות) only applies from the official
+        // retirement age — drawing an annuity at 60 gets NO exemption until 67.
+        pensionExemptionFromAge: 67,
+        // קצבה מזערית (2026, today's ₪/mo): lump-sum/היוון is only allowed for
+        // the pot ABOVE what's needed to secure this minimum annuity.
+        pensionMinAnnuity: 5306,
         pensionCpiLinked: true,
         pensionFeeDeposit: 1,
-        pensionFeeBalance: 0.15,
+        pensionFeeBalance: 0.22,
         studyFundFeeBalance: 0.5,
-        // Israeli payroll rates for computing net salary & deposits from gross.
+        // Bituach Leumi old-age pension (קצבת אזרח ותיק). Amount is today's
+        // ₪/mo (2026 basic single: ₪1,838; +2%/yr seniority up to +50% ≈
+        // ₪2,757 max; couple ₪2,762) — CPI-grown in projections, added as
+        // untaxed income from `fromAge` (67 is income-tested; 70 unconditional).
+        oldAge: { enabled: false, monthly: 1838, fromAge: 70 },
+        // Barista-FIRE what-if on the FIRE tab: part-time net income kept
+        // after leaving full-time work, until a given age.
+        barista: { monthly: 5000, untilAge: 60 },
+        // Monte Carlo settings: paths per run, target confidence for the safe
+        // retirement age, and annual return volatility (std dev, %) per
+        // account type. One shock per type per year.
+        mc: {
+          sims: 500,
+          confidence: 90,
+          vol: { cash: 0.5, money_market: 1, taxable: 15, study_fund: 10, pension: 8, rsu: 30, custom: 10 },
+        },
+        // Israeli payroll rates for computing net salary & deposits from gross
+        // (2026: employee NI+health 4.27% up to ₪7,703/mo, 12.17% above, up to
+        // the ₪51,910/mo insurable ceiling).
         payroll: {
           creditPointValue: 242,
-          niReducedRate: 3.5,
-          niFullRate: 12,
-          niThresholdMonthly: 7522,
-          niCeilingMonthly: 49030,
+          niReducedRate: 4.27,
+          niFullRate: 12.17,
+          niThresholdMonthly: 7703,
+          niCeilingMonthly: 51910,
           pensionEmployeePct: 6,
           pensionEmployerPct: 6.5,
           severancePct: 8.33,
@@ -151,26 +181,45 @@
         allocations: [],
         defaultAccountId: investDefault,
         grants: [
-          { id: uid("grant"), name: "Company RSU", symbol: "", currency: "USD", sharePrice: 150, expectedGrowthPct: 8, vestedShares: 100, sharesPerYear: 100, grantBasisUsd: 80, ordinaryTaxRate: 47, capGainsRate: 25, startAge: 30, stopAge: 45, vestUntilRetire: false },
+          { id: uid("grant"), name: "Company RSU", symbol: "", currency: "USD", sharePrice: 150, expectedGrowthPct: 8, vestedShares: 100, sharesPerYear: 100, grantBasisUsd: 80, ordinaryTaxRate: 47, capGainsRate: 25, startAge: 30, stopAge: 45, vestUntilRetire: false, vests: [] },
         ],
         extra: [],
+      },
+
+      // Real estate & mortgages: properties appreciate and can pay rent;
+      // loans amortize monthly (Spitzer), optionally CPI-linked. Equity
+      // (value − debt) counts toward net worth; rent adds to income and
+      // mortgage payments to outgoings — but property equity is NOT part of
+      // the liquid/FIRE-eligible pot (you can't spend the house).
+      realEstate: {
+        properties: [],
+        loans: [],
+        // Rate scenario for variable tracks: prime drifts by primeChangePp
+        // (percentage points) linearly over primeYears then stays; every-5-yr
+        // tracks add resetStepPp at each reset. CPI linkage follows the
+        // plan's inflation assumption.
+        scenario: { primeChangePp: 0, primeYears: 5, resetStepPp: 0.25 },
       },
 
       spending: {
         growthPct: 2,
         fireMonthly: 12000,
-        useCategoriesInRetirement: true,
         // When true, retirement projections use the fixed FIRE monthly spend
         // above instead of your real categories/steps. Default false = use real.
         useHeadlineSpending: false,
+        // Named category lists. Each category belongs to one list (listId); the
+        // active list drives projections & the tracker, and steps can switch
+        // the plan to a different list from a given age.
+        lists: [{ id: defaultListId, name: "Default" }],
+        activeListId: defaultListId,
         categories: [
-          { id: uid("cat"), name: "Housing", freq: "monthly", monthly: 4000, startAge: 0, endAge: 80, growthPct: 2, inflate: true },
-          { id: uid("cat"), name: "Food & groceries", freq: "monthly", monthly: 2000, startAge: 0, endAge: 80, growthPct: 2, inflate: true },
-          { id: uid("cat"), name: "Transport", freq: "monthly", monthly: 1000, startAge: 0, endAge: 80, growthPct: 2, inflate: true },
-          { id: uid("cat"), name: "Utilities & bills", freq: "monthly", monthly: 700, startAge: 0, endAge: 80, growthPct: 2, inflate: true },
-          { id: uid("cat"), name: "Insurance & health", freq: "monthly", monthly: 600, startAge: 0, endAge: 80, growthPct: 2, inflate: true },
-          { id: uid("cat"), name: "Leisure & misc", freq: "monthly", monthly: 1500, startAge: 0, endAge: 80, growthPct: 2, inflate: true },
-          { id: uid("cat"), name: "Annual (vacations, etc.)", freq: "yearly", monthly: 20000, startAge: 0, endAge: 80, growthPct: 2, inflate: true },
+          { id: uid("cat"), name: "Housing", freq: "monthly", monthly: 4000, startAge: 0, endAge: 80, growthPct: 2, inflate: true, listId: defaultListId },
+          { id: uid("cat"), name: "Food & groceries", freq: "monthly", monthly: 2000, startAge: 0, endAge: 80, growthPct: 2, inflate: true, listId: defaultListId },
+          { id: uid("cat"), name: "Transport", freq: "monthly", monthly: 1000, startAge: 0, endAge: 80, growthPct: 2, inflate: true, listId: defaultListId },
+          { id: uid("cat"), name: "Utilities & bills", freq: "monthly", monthly: 700, startAge: 0, endAge: 80, growthPct: 2, inflate: true, listId: defaultListId },
+          { id: uid("cat"), name: "Insurance & health", freq: "monthly", monthly: 600, startAge: 0, endAge: 80, growthPct: 2, inflate: true, listId: defaultListId },
+          { id: uid("cat"), name: "Leisure & misc", freq: "monthly", monthly: 1500, startAge: 0, endAge: 80, growthPct: 2, inflate: true, listId: defaultListId },
+          { id: uid("cat"), name: "Annual (vacations, etc.)", freq: "yearly", monthly: 20000, startAge: 0, endAge: 80, growthPct: 2, inflate: true, listId: defaultListId },
         ],
         steps: [],
       },
@@ -194,13 +243,27 @@
     const tax = ordinary * ((grant.ordinaryTaxRate || 0) / 100) + apprec * ((grant.capGainsRate || 0) / 100);
     return { gross, tax, net: gross - tax, effectiveRate: gross > 0 ? tax / gross : 0 };
   }
+  // Currently-vested shares of a grant. A grant WITH a dated schedule derives
+  // them from its events (anything dated on/before the as-of date has vested);
+  // otherwise the manual `vestedShares` field is used.
+  function vestedSharesOf(state, grant) {
+    const events = (grant.vests || []).filter((v) => v && v.date && (v.shares || 0) > 0);
+    if (!events.length) return grant.vestedShares || 0;
+    const asOf = refDate(state);
+    let sum = 0;
+    events.forEach((v) => {
+      const d = new Date(v.date);
+      if (!isNaN(d.getTime()) && d <= asOf) sum += v.shares || 0;
+    });
+    return sum;
+  }
   // Aggregate after-tax value of all currently-vested grant shares.
   function grantsVested(state) {
     const usdIls = state.market.usdIls;
     let gross = 0, tax = 0, net = 0;
     const per = [];
     (state.income.grants || []).forEach((g) => {
-      const r = grantNet(g, usdIls, g.vestedShares || 0, g.sharePrice);
+      const r = grantNet(g, usdIls, vestedSharesOf(state, g), g.sharePrice);
       gross += r.gross; tax += r.tax; net += r.net;
       per.push({ grant: g, gross: r.gross, tax: r.tax, net: r.net });
     });
@@ -214,7 +277,35 @@
       vestedShares: 0, sharesPerYear: 0, grantBasisUsd: 0,
       ordinaryTaxRate: 47, capGainsRate: 25,
       startAge: Math.round(st.profile.currentAge), stopAge: st.profile.fireAge, vestUntilRetire: false,
+      vests: [],
     };
+  }
+
+  /* ---- Real estate factories ---------------------------------------------- */
+  function newProperty() {
+    return { id: uid("prop"), name: "Apartment", value: 2000000, growthPct: 3, rentMonthly: 0, rentGrowthPct: 2, notes: "" };
+  }
+  function newLoan(state) {
+    const props = (state && state.realEstate && state.realEstate.properties) || [];
+    return {
+      id: uid("loan"), name: "Track", propertyId: props.length ? props[0].id : "",
+      principal: 1000000, // remaining principal today
+      annualRatePct: 5, years: 20,
+      track: "fixed", // fixed | fixed_cpi | prime | var5 | var5ni (מסלול)
+      method: "spitzer", // spitzer | equal (קרן שווה)
+      cpiLinked: false, // legacy field; `track` is authoritative
+    };
+  }
+
+  /* ---- Spending lists ------------------------------------------------------
+   * Categories belong to a named list (category.listId). The active list is
+   * what projections & the tracker use; a spending step can switch the plan
+   * to another list from a given age.
+   *-----------------------------------------------------------------------*/
+  function listCategories(state, listId) {
+    const sp = state.spending;
+    const lid = listId || sp.activeListId;
+    return (sp.categories || []).filter((c) => (c.listId || sp.activeListId) === lid);
   }
 
   /* ---- Persistence -------------------------------------------------------- */
@@ -304,6 +395,27 @@
     s.assumptions = Object.assign({}, d.assumptions, s.assumptions || {});
     s.assumptions.defaultReturns = Object.assign({}, d.assumptions.defaultReturns, (s.assumptions || {}).defaultReturns || {});
     s.assumptions.payroll = Object.assign({}, d.assumptions.payroll, (s.assumptions || {}).payroll || {});
+    s.assumptions.oldAge = Object.assign({}, d.assumptions.oldAge, (s.assumptions || {}).oldAge || {});
+    s.assumptions.barista = Object.assign({}, d.assumptions.barista, (s.assumptions || {}).barista || {});
+    s.assumptions.mc = Object.assign({}, d.assumptions.mc, (s.assumptions || {}).mc || {});
+    s.assumptions.mc.vol = Object.assign({}, d.assumptions.mc.vol, ((s.assumptions || {}).mc || {}).vol || {});
+    if (!s.realEstate) s.realEstate = { properties: [], loans: [] };
+    if (!Array.isArray(s.realEstate.properties)) s.realEstate.properties = [];
+    if (!Array.isArray(s.realEstate.loans)) s.realEstate.loans = [];
+    s.realEstate.scenario = Object.assign({}, d.realEstate.scenario, s.realEstate.scenario || {});
+    s.realEstate.loans.forEach((l) => {
+      if (!l.track) l.track = l.cpiLinked ? "fixed_cpi" : "fixed";
+      if (!l.method) l.method = "spitzer";
+    });
+    // Refresh NI rates that still sit on the pre-2026 defaults (values the
+    // user never touched) to the current statutory figures.
+    const pr2 = s.assumptions.payroll;
+    if (pr2.niReducedRate === 3.5 && pr2.niFullRate === 12 && pr2.niThresholdMonthly === 7522 && pr2.niCeilingMonthly === 49030) {
+      pr2.niReducedRate = d.assumptions.payroll.niReducedRate;
+      pr2.niFullRate = d.assumptions.payroll.niFullRate;
+      pr2.niThresholdMonthly = d.assumptions.payroll.niThresholdMonthly;
+      pr2.niCeilingMonthly = d.assumptions.payroll.niCeilingMonthly;
+    }
     // Ensure the withdrawal order exists and lists every known account kind
     // exactly once (append any missing kinds so nothing becomes undrawable).
     const ALL_KINDS = ["cash", "money_market", "taxable", "rsu", "study_fund", "custom", "pension"];
@@ -313,8 +425,22 @@
     const priorSp = s.spending || {};
     s.spending = Object.assign({}, d.spending, priorSp);
     // Derive the new "use fixed FIRE spending" flag from the old retirement
-    // toggle for plans saved before this field existed.
+    // toggle for plans saved before this field existed; the old flag is dead.
     if (priorSp.useHeadlineSpending == null) s.spending.useHeadlineSpending = priorSp.useCategoriesInRetirement === false;
+    delete s.spending.useCategoriesInRetirement;
+    // Spending lists: older plans had one flat category set — wrap it in a
+    // "Default" list and point every category (and the active pointer) at it.
+    if (!Array.isArray(s.spending.lists) || !s.spending.lists.length) {
+      const lid = uid("list");
+      s.spending.lists = [{ id: lid, name: "Default" }];
+      s.spending.activeListId = lid;
+    }
+    if (!s.spending.activeListId || !s.spending.lists.some((l) => l.id === s.spending.activeListId)) {
+      s.spending.activeListId = s.spending.lists[0].id;
+    }
+    (s.spending.categories || []).forEach((c) => {
+      if (!c.listId || !s.spending.lists.some((l) => l.id === c.listId)) c.listId = s.spending.activeListId;
+    });
     const priorIncome = s.income || {};
     const hadGrants = Array.isArray(priorIncome.grants);
     const legacy = priorIncome.rsu;
@@ -340,7 +466,11 @@
     }
     delete s.income.rsu;
     if (s.market) delete s.market.amznPrice;
-    (s.income.grants || []).forEach((g) => { if (g.symbol == null) g.symbol = ""; if (g.vestUntilRetire == null) g.vestUntilRetire = false; });
+    (s.income.grants || []).forEach((g) => {
+      if (g.symbol == null) g.symbol = "";
+      if (g.vestUntilRetire == null) g.vestUntilRetire = false;
+      if (!Array.isArray(g.vests)) g.vests = [];
+    });
     // Salary mode: older plans only had a net figure — keep them on 'net'.
     if (!s.income.salaryMode) s.income.salaryMode = "net";
     if (s.income.grossMonthly == null) s.income.grossMonthly = s.income.monthlyNetSalary || 0;
@@ -350,7 +480,14 @@
     if (!Array.isArray(s.income.allocations)) s.income.allocations = [];
     // Backfill spending frequency (monthly by default) on older exports.
     (s.spending.categories || []).forEach((c) => { if (!c.freq) c.freq = "monthly"; });
-    (s.spending.steps || []).forEach((st2) => { if (!st2.freq) st2.freq = "monthly"; });
+    (s.spending.steps || []).forEach((st2) => {
+      if (!st2.freq) st2.freq = "monthly";
+      if (!st2.mode) st2.mode = "amount"; // 'amount' | 'list'
+      if (st2.listId == null) st2.listId = "";
+    });
+    // Tracker: per-month/year category exclusions ("this item doesn't apply here").
+    (s.tracker.months || []).forEach((m) => { if (!m.excluded) m.excluded = {}; });
+    (s.tracker.years || []).forEach((y) => { if (!y.excluded) y.excluded = {}; });
     // Backfill per-account fields on older exports.
     (s.accounts || []).forEach((a) => {
       if (a.group == null) a.group = kindGroup(a.kind);
@@ -437,6 +574,16 @@
     const d = o ? new Date(o) : new Date();
     return isNaN(d.getTime()) ? new Date() : d;
   }
+  // Exact (fractional) age at an arbitrary date. Null when no birth date is
+  // set — callers fall back to the integer projection ages.
+  function exactAgeAt(state, date) {
+    const bs = state.profile && state.profile.birthDate;
+    if (!bs) return null;
+    const b = new Date(bs);
+    if (isNaN(b.getTime()) || !(date instanceof Date) || isNaN(date.getTime())) return null;
+    const years = (date - b) / (365.25 * 24 * 3600 * 1000);
+    return years > 0 ? years : null;
+  }
   function ageFromDob(state) {
     const bs = state.profile && state.profile.birthDate;
     if (!bs) return state.profile.currentAge;
@@ -473,7 +620,12 @@
     grantNet,
     grantsVested,
     newGrant,
+    newProperty,
+    newLoan,
+    listCategories,
+    vestedSharesOf,
     ageFromDob,
+    exactAgeAt,
     refDate,
   };
 })();

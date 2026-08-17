@@ -1,13 +1,19 @@
 # Usage — page by page
 
-Open `index.html`. Your plan **autosaves** to the browser as you go. The header always shows current
-net worth, the FIRE target, and whether the plan survives to 80.
+Open `index.html`. Your plan **autosaves** to the browser as you go. The header always shows your plan
+name, current net worth, **retirement year (with your exact age)**, **net worth at retirement**,
+**time to retirement (years + months)**, and whether the plan survives to your end age.
+
+**Dates & ages**: projection rows are calendar-year aligned, so the app always pairs an **absolute
+year** with your **exact age (years + months)** from your date of birth — e.g. "2033 · 32y 4m". Set
+your birth date on Market & Assumptions to enable this (without it, integer ages are shown).
 
 ## 📊 Dashboard
-Read-only overview. Metric cards — current net worth, liquid, pension, **retirement spend at your
-retirement age**, plan status, net worth at 80, **years to retirement**, **savings rate now**, **net
-worth at retirement**, and the **withdrawal rate you'd need at retirement** — plus a net-worth-to-80 line,
-current allocation doughnut, liquid-vs-pension stacked chart, and a **Retirement readiness** panel. All of
+Read-only overview. Metric cards — current net worth, liquid, pension, **retirement spend**, plan
+status, net worth at the end age, **time to retirement (y+m)**, **savings rate now**, **net worth at
+retirement**, **liquid (excl. pension) at retirement**, and the **withdrawal rate you'd need at
+retirement** — plus a net-worth line, current allocation doughnut, an **allocation-at-retirement**
+doughnut, liquid-vs-pension stacked chart, and a **Retirement readiness** panel. All of
 it is based on your **real** projected spending: your non-pension assets at retirement age, your modeled
 retirement spend that year, how many years that pot covers, and whether the plan survives to your end age.
 (The theoretical fixed-spend / SWR portfolio target lives on the 🔥 FIRE tab, not here.)
@@ -68,6 +74,12 @@ The theoretical FIRE target maths, kept separate from your real spending:
 - By default, **projections and every calculation use your real Spending categories & step-changes**. Tick
   **“Use this fixed spend for projections”** only if you want the retirement years to assume the fixed FIRE
   monthly spend instead.
+- **🏖️ Coast FIRE** — the earliest age you could **stop saving entirely** (keep working just to cover
+  expenses, let the portfolio compound) and still retire at your configured retirement age.
+- **☕ Barista FIRE** — set a part-time net income and until-age; shows the earliest age you could
+  leave full-time work with that income bridging the gap.
+- The earliest-age searches and sensitivity chart compute in the background (a short "computing…"
+  appears while sliders move).
 
 ## 💰 Income
 - **Salary**: choose **gross** or **net** mode.
@@ -84,22 +96,34 @@ The theoretical FIRE target maths, kept separate from your real spending:
   all if you have no RSUs. Tick a grant's **“ret age”** box to tie its vest-until to your retirement age —
   it then follows the retirement age automatically wherever you change it. Each grant shows as a computed
   account on the Accounts page.
-  - **↻ Fetch live prices** (optional) pulls current quotes from Finnhub by each grant's **Symbol** —
-    requires a free Finnhub API key entered in the panel. Only runs on click.
+  - **📅 Vesting schedule (dated vests)**: click a grant's Schedule button to list explicit vest events —
+    each with its own **date** and **share count** (a grant can vest different amounts on different
+    dates, past or future). A schedule **replaces** the flat model entirely: events dated on/before
+    today count as **already vested** (the Vested sh. cell becomes computed and greyed out, like
+    Sh./yr and the vest window), future events vest on their date, and vesting stops at your
+    retirement year. Everything — vested count, totals, charts — updates live as you type.
+  - **↻ Fetch live prices** (optional) pulls current quotes from Yahoo Finance by each grant's
+    **Symbol** — no API key needed (goes through a public CORS proxy). Only runs on click.
 - **Extra income streams**: rent, side income, a partner's income, one-off windows, etc.
 - **Surplus allocation**: pick a default account for "the rest," then add rules like "50% → money
   market" or "₪2,000/month → pension." A live line shows how this year's surplus is split.
 
 ## 🛒 Spending
-Two complementary ways to model spend:
+- **Spending lists** — categories live in named lists (e.g. "Default", "With kids", "Lean"). The
+  **active list** drives projections and the tracker; switch it with the Active-list dropdown. Use the
+  **Edit list** chips to view/edit another list, and the toolbar to **create, duplicate, rename, or
+  delete** lists (the last list can't be deleted).
 - **Categories** — Housing, Food, Transport, … each with an amount, a **per month / per year**
   frequency (yearly items like vacations/insurance are amortized to a monthly-equivalent), age window,
   own growth %, and an *inflate* toggle. A **total** line sums all active categories (monthly & yearly).
   The doughnut shows the mix.
-- **Step changes (differential spending)** — override total spend from a given age, also with a
-  month/year frequency. Example: from age 31, ₪13,000/month. A step **persists from its age onward**.
-- **Spending used by age** — a preview table showing, as **age ranges**, which rule decides your spend
-  (step override → categories, or the fixed FIRE spend if enabled on the 🔥 FIRE tab).
+- **Step changes (differential spending)** — take effect from a given age and persist onward. Two modes:
+  - **Fixed amount** — override total spend (e.g. from age 31, ₪13,000/month), month/year frequency.
+  - **Use list** — switch the plan to another category list from that age (e.g. from age 35 use the
+    "With kids" list).
+- **Spending used by age** — a preview table showing, as **year + exact-age ranges**, which rule decides
+  your spend (step override / list switch → categories of the active list, or the fixed FIRE spend if
+  enabled on the 🔥 FIRE tab).
 - **Category defaults** — the default per-year growth applied to new categories. The theoretical
   fixed-spend FIRE target now lives on the **🔥 FIRE** tab.
 - A line chart projects total annual spend to 80.
@@ -114,15 +138,47 @@ works like the Predictions page — a grid of clickable **tiles**, and you load 
 - **Yearly tracking** — one-off / annual costs (vacations, insurance, taxes) are logged **once per year**,
   not tied to a month. Add/open a **year tile** the same way; the detail table lists your **yearly**
   categories with their annual budget, actual, and variance, plus a note.
+- **Per-month exclusions** — every category row has a **🚫 skip** button that excludes that category
+  from *that month/year only* (e.g. an item you added in July that isn't relevant to April). Excluded
+  rows are struck through and drop out of the budget, totals, tiles, and charts; click **↩ include** to
+  restore. The budget itself (Spending page) is untouched.
+- The tracker budgets against the **active spending list**.
 - Everything **refreshes as you type** — deltas, subtotals and totals update live without losing your place.
 - Charts track **budget vs actual** over time — one for monthly spending and one for yearly costs.
   History is saved with your plan.
 
+## 🏠 Mortgage & Real Estate
+A mortgage **simulator with Israeli tracks (מסלולים)**, fully integrated into the plan:
+- **Properties** — value today, appreciation %/yr, monthly rent (0 if you live there), rent growth.
+- **Mortgage tracks** — one row per מסלול: קל"צ (fixed, unlinked), קבועה צמודה (fixed, CPI-linked),
+  פריים (variable prime), משתנה כל 5 (rate resets every 5 years, linked or not). Each row has its
+  remaining principal, current rate, years left, and a **method**: Spitzer (constant payment) or
+  קרן שווה (equal principal — starts higher, declines). Computed per track: **payment now, peak
+  payment, total interest ahead, payoff year**.
+- **Rate scenario (stress test)** — drift the prime rate by ±pp over N years and step the
+  every-5-yr tracks at each reset; CPI linkage follows the plan's inflation. The **monthly-payment-
+  over-time chart** shows the resulting payment path per track and in total.
+- A **mix summary** checks the Bank-of-Israel composition rule (≥⅓ fixed-rate, prime ≤⅔).
+- **Charts** — property value vs debt vs equity over time, and annual rent vs mortgage payments.
+- **Integration** — equity (value − debt) counts toward net worth everywhere (Dashboard card,
+  Projections table/CSV, header), rent adds to income, payments to outgoings and the survival
+  check — but the house is never treated as liquid/FIRE-spendable money. Play with rates, terms,
+  and appreciation; everything recalculates instantly.
+
 ## 👵 Pension (Israel)
-Models pension income after the access age using Israeli rules.
-- **Payout mode**: *annuity* (monthly קצבה = pot ÷ conversion coefficient, with a tax-exempt portion of
-  the entitling-pension ceiling and the rest taxed) or *lump* (drawdown).
-- Edit the **conversion coefficient**, **entitling ceiling**, **exempt %**, CPI-linking, and access age.
+Models pension income after the access age (earliest 60 by law) using current Israeli rules.
+- **Payout mode**: *annuity* (monthly קצבה = pot ÷ conversion coefficient) or *lump* (היוון — the
+  statutory **minimum annuity** is secured first; only the pot above it is withdrawn).
+- **Tax exemption**: follows the statutory schedule by default (57.5% of the entitling ceiling in
+  2026 → 62.5% in 2027 → 67% from 2028) and **only applies from age 67** (גיל הזכאות) — an annuity
+  drawn at 60 is modeled as fully taxable until then, and the page shows net both at access and
+  from 67. Untick the auto toggle to set a manual %.
+- Edit the **conversion coefficient** (≈186–200 at 67; higher when drawing at 60), **entitling
+  ceiling** (₪9,430/mo), **minimum annuity** (₪5,306/mo, 2026), **exemption start age**,
+  CPI-linking, and access age.
+- **Bituach Leumi old-age pension (קצבת אזרח ותיק)** — tick the box to add the state pension to
+  retirement income (default ₪1,838/mo in today's ₪ from age 70, CPI-linked, untaxed). Fold
+  seniority increments (+2%/insured year, up to +50%) into the amount yourself.
 - **Management fees (דמי ניהול)**: a fee from every **deposit** (legal cap 6%, typical ~1.5%) and an
   annual fee from the **balance** (legal cap 0.5%, typical ~0.15%). Both reduce the pot; a note shows
   what they cost on your current balance and monthly deposit.
@@ -139,20 +195,36 @@ Accounts page; change an account's **Group** field to control how it's aggregate
 Income vs spending line — now shows **salary+extra**, **net pension**, **withdrawn for living (net)**,
 and **spending**, with a note listing lifetime withdrawals by **source group** and total taxes
 (capital-gains on withdrawals + pension income tax).
-- **Year-by-year table**: one row per age with income, spend, each group's balance, total, and liquid.
-  The retirement-age row is highlighted; a depletion year (if any) is flagged red.
+- **Year-by-year table**: one row per **calendar year** (with your exact age at year-end) with income,
+  spend, each group's balance, total, and liquid. The retirement-year row is highlighted (readable in
+  both light and dark mode); a depletion year (if any) is flagged red.
 - **Income & withdrawals by phase** — a plain-language list that groups consecutive years with the same
   income/withdrawal pattern into ranges, e.g. "2037–2045 (ages 41–49) — Retired: withdraw ~₪X/yr net from
   Brokerage …", showing per-year averages, the phase total, capital-gains tax, and when pension begins.
 - **Real (today's ₪)** toggle and **Export CSV** (also grouped).
 
 ## 🎯 Predictions
-Its own page. Save the current projection as a **baseline** (one box per year, kept for every future
-year). The current year is highlighted. Each year, click **Record this year's actuals** to snapshot your
-real account balances; the boxes then show the **delta vs prediction** (global %), and selecting a year
-shows a per-account predicted-vs-actual table plus a predicted-vs-actual net-worth chart. Future boxes
-are never deleted — re-saving the baseline just refreshes the predicted path. A selected year with an
-actual can be cleared via **Remove recorded actual**.
+Everything is keyed by **calendar year**. Three-step flow (explained on-page):
+1. **Save a baseline** — freezes a copy of today's projection, one box per calendar year. That's the
+   prediction you're measured against; it only changes when you explicitly click **Update baseline**.
+2. **Record actuals** — for the current year, one click snapshots your real balances. For **any other
+   year (including past years)**, type the year and click **➕ Add year to fill manually**, then enter
+   each account's actual balance in the detail table (totals and deltas update as you type).
+3. **Compare** — boxes show predicted vs actual with a global %, the selected year gets a per-account
+   predicted-vs-actual table, and a chart plots both lines. Years that exist only as actuals (e.g. past
+   years) show "—" for the prediction. **Remove actuals** clears a year's recorded values.
+
+## 🎲 Monte Carlo
+Sequence-of-returns risk: the plan is re-run hundreds of times with randomized yearly returns.
+- **Settings** — simulations per run, target confidence, and annual volatility (std dev %) per
+  account type (reference: global equities ~15–18%, bond-heavy ~5–8%, single stock 30%+). Each year
+  every account *type* gets one shared shock, so all your equity funds move together.
+- **Results** — **success rate** (share of paths surviving to your end age), median / p10 / p90
+  final net worth, the typical depletion age of failing paths, a **percentile fan chart** of net
+  worth, and a **final-net-worth distribution**.
+- **Safe retirement age** — the earliest retirement age whose success rate meets your target
+  confidence, with a one-click apply button. Heavy computations are debounced and run in the
+  background.
 
 ## 🔀 What-if / Switch
 Compare **selling one holding and reinvesting the net into another**. Pick a source holding and how

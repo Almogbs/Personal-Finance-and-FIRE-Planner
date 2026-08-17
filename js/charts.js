@@ -232,18 +232,28 @@
     });
     if (cfg.doughnut) { ctx.globalCompositeOperation = "destination-out"; ctx.beginPath(); ctx.arc(cx, cy, r * 0.55, 0, Math.PI * 2); ctx.fill(); ctx.globalCompositeOperation = "source-over"; }
 
-    // legend
+    // legend — shrink row height/font when there are many slices, and
+    // ellipsize names so rows never run off the right edge of the canvas.
     const TH = theme();
-    ctx.font = "600 13px system-ui, sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
-    let ly = cy - (slices.length * 19) / 2 + 9;
+    const rowH = slices.length > 10 ? 15 : 19;
+    const fontPx = slices.length > 10 ? 11 : 13;
+    ctx.font = "600 " + fontPx + "px system-ui, sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
     const lx = w * 0.68;
+    const maxTextW = Math.max(40, w - lx - 18 - 8);
+    let ly = Math.max(rowH / 2 + 2, cy - (slices.length * rowH) / 2 + rowH / 2);
     slices.forEach((s, i) => {
       ctx.fillStyle = s.color || PALETTE[i % PALETTE.length];
       ctx.fillRect(lx, ly - 6, 12, 12);
       ctx.fillStyle = TH.label;
-      const pct = ((s.value / total) * 100).toFixed(1);
-      ctx.fillText(s.name + "  " + pct + "%", lx + 18, ly);
-      ly += 19;
+      const pct = ((s.value / total) * 100).toFixed(1) + "%";
+      let name = s.name;
+      let label = name + "  " + pct;
+      while (name.length > 1 && ctx.measureText(label).width > maxTextW) {
+        name = name.slice(0, -1);
+        label = name + "…  " + pct;
+      }
+      ctx.fillText(label, lx + 18, ly);
+      ly += rowH;
     });
 
     attachHover(canvas, (mx, my, evt) => {

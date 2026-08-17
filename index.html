@@ -4,14 +4,16 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>📊 Personal Finance & FIRE Planner</title>
-  <meta name="description" content="Standalone interactive personal-finance planner for Israel: budget & expenses, portfolio & allocation, salary/tax, pension, equity grants, and FIRE projection.">
-  <link rel="stylesheet" href="css/styles.css?v=1.22.8">
+  <meta name="description" content="Standalone interactive personal-finance planner for Israel: budget & expenses, portfolio & allocation, salary/tax, pension, mortgage & real estate, equity grants, and FIRE projection.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📊</text></svg>">
+  <link rel="stylesheet" href="css/styles.css?v=1.25.0">
 </head>
 <body>
   <header class="topbar">
-    <div class="logo"><span class="flame">📊</span> Personal Finance &amp; FIRE Planner <span class="tagline">· budget · portfolio · pension · FIRE</span> <span id="header-name"></span></div>
+    <div class="logo"><span class="flame">📊</span> Personal Finance &amp; FIRE Planner <span id="header-name"></span></div>
     <div id="header-status"></div>
     <div class="hdr-actions">
+      <button class="btn small" id="btn-real" title="Show all values in today's ₪ (real) or nominal">₪ Nominal</button>
       <button class="btn small" id="btn-theme">🌙 Dark</button>
     </div>
   </header>
@@ -31,11 +33,11 @@
 
   <!-- Classic (non-module) scripts so the app runs directly from file:// with no server.
        The ?v= query is a cache-buster — bump it whenever the JS/CSS changes. -->
-  <script src="js/state.js?v=1.22.8"></script>
-  <script src="js/charts.js?v=1.22.8"></script>
-  <script src="js/engine.js?v=1.22.8"></script>
-  <script src="js/live.js?v=1.22.8"></script>
-  <script src="js/ui.js?v=1.22.8"></script>
-  <script src="js/app.js?v=1.22.8"></script>
+  <script src="js/state.js?v=1.25.0"></script>
+  <script src="js/charts.js?v=1.25.0"></script>
+  <script src="js/engine.js?v=1.25.0"></script>
+  <script src="js/live.js?v=1.25.0"></script>
+  <script src="js/ui.js?v=1.25.0"></script>
+  <script src="js/app.js?v=1.25.0"></script>
 </body>
 </html>

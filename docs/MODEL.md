@@ -13,6 +13,12 @@ deterministic model. It is **not** tax advice and does not attempt to reproduce 
 
 - Projection runs yearly from `round(profile.currentAge)` to `profile.endAge` (default 80).
 - "Working" years are ages `< profile.fireAge`; "retired" years are `>= fireAge`.
+- **Rows are calendar-year aligned**: the first row is the current calendar year prorated to Dec 31,
+  and each subsequent row is one calendar year. Every row carries its `year`, and the UI pairs that
+  absolute year with your **exact age (years + months)** derived from the birth date — e.g.
+  "2033 · 32y 4m" — instead of a rounded "2033 · age 32" that can be off by most of a year.
+  Age-milestone events (retirement, pension access, depletion) are labeled with the year they take
+  effect and your exact age at the start of that year.
 
 ## Accounts
 
@@ -98,14 +104,23 @@ US-Israel treaty interactions, or partial sales.
 
 Monthly spend at a given age is resolved as:
 
-1. **Step override** — if any `steps[].fromAge <= age`, use the latest one:
-   `step.monthly * (1 + growthPct/100)^(age - step.fromAge)`.
+Categories are organized into named **lists** (`spending.lists`; each category carries a `listId`).
+The **active list** (`spending.activeListId`) drives projections and the tracker; a step-change can
+switch the plan to a different list from a given age.
+
+1. **Step override** — if any `steps[].fromAge <= age`, the latest one wins:
+   - `mode = 'amount'` (default): `step.monthly * (1 + growthPct/100)^(age - step.fromAge)`.
+   - `mode = 'list'`: the step selects `step.listId` as the category list from that age on
+     (spending is then the sum of that list's active categories, rule 3).
 2. Else if retired and `useHeadlineSpending = true` (opt-in on the FIRE tab):
    `fireMonthly * (1 + inflation)^(age - fireAge)`.
-3. Else **sum of active categories**. Amounts are **today's money**; if `inflate`, they grow from the
-   *current age* forward: `monthly * (1 + growth)^(max(0, age - currentAge))`.
+3. Else **sum of active categories of the list in force**. Amounts are **today's money**; if
+   `inflate`, they grow from the *current age* forward: `monthly * (1 + growth)^(max(0, age - currentAge))`.
 
 Annual spend = monthly × 12.
+
+The expense tracker budgets against the **active list**; individual categories can be excluded from
+one specific tracked month/year (`tracker.months[].excluded`) without touching the budget list.
 
 ## Salary & payroll (Israel, gross mode)
 
@@ -140,7 +155,13 @@ net       = gross − tax
 ```
 
 - Already-vested shares (`vestedShares` at `sharePrice`) seed the account's balance.
-- New vests (`sharesPerYear`) are added each year while employed **and** within the grant's
+- **Dated vesting schedule** (`grant.vests = [{date, shares}]`): when a grant has explicit vest
+  events, each event vests its own share count on its own date (a grant can vest different amounts
+  on different dates, past or future), priced at `sharePrice × (1 + expectedGrowthPct)^(yearsFromToday)`.
+  Events dated **on or before the as-of date count as already vested** (they define the grant's
+  current vested shares; the manual `vestedShares` field is ignored); future events vest on their
+  date and stop at the retirement year. Dated events **replace** the flat model below entirely.
+- Otherwise, new vests (`sharesPerYear`) are added each year while employed **and** within the grant's
   `[startAge, stopAge)` window, priced at `sharePrice × (1 + expectedGrowthPct)^k`. This lets you start a
   grant later, stop a grant early, or remove grants entirely (an empty list = no RSU).
 - The account then compounds at the grant's `expectedGrowthPct`; selling it later pays capital-gains tax
@@ -148,24 +169,98 @@ net       = gross − tax
 
 ## Pension income (Israeli rules)
 
-`state.assumptions.pensionMode` selects how the pension is used after `pensionAccessAge`:
+`state.assumptions.pensionMode` selects how the pension is used after `pensionAccessAge`
+(earliest 60 by law):
 
 - **`annuity` (default):** each pension pot converts to a monthly קצבה = `pot / coefficient` at its
   access age, optionally CPI-linked. Tax follows the Israeli entitling-pension rules:
   ```
-  exemptMonthly  = exemptionPct% × entitlingCeiling(inflated to access year)
+  exemptionPct(year) = statutory schedule when pensionExemptionAuto:      // Amendment 190, rescheduled
+                       52% ≤2024 · 57% 2025 · 57.5% 2026 · 62.5% 2027 · 67% 2028+
+  exemptMonthly  = age ≥ pensionExemptionFromAge (default 67, גיל הזכאות)
+                     ? exemptionPct% × entitlingCeiling(inflated)
+                     : 0            // an annuity drawn at 60 is fully taxable until 67
   taxableMonthly = max(0, grossMonthly − exemptMonthly)
   tax            = incomeTaxAnnual(taxableMonthly × 12)   // scaled brackets
   netMonthly     = grossMonthly − tax
   ```
-  The pot is drawn down as it pays the gross annuity; net pension is added to retirement income.
-  **Management fees** reduce the pot: a % is skimmed from every deposit (per-account `feeDeposit`,
-  pension only) and an annual % from the balance (per-account `feeBalance`, pension and study-fund).
-  These are edited on the Accounts page.
-  Public reference figures: entitling ceiling ≈ ₪9,430/mo, exempt portion ~52% (was slated to reach
-  67%), coefficient ~200–220. All are editable on the Pension page — this is an estimate, not advice.
-- **`lump`:** the pot becomes drawable at the access age and is withdrawn to fund spending like any
-  other liquid account (no annuity).
+  The projection applies this year by year, so the same annuity nets less before age 67 and more from
+  the year the exemption kicks in. **Management fees** reduce the pot: a % is skimmed from every
+  deposit (per-account `feeDeposit`, pension only) and an annual % from the balance (per-account
+  `feeBalance`, pension and study-fund); legal caps 6% / 0.5%, state-selected default funds 1% / 0.22%.
+  2026 reference figures: entitling ceiling ₪9,430/mo, coefficient ≈186–200 at 67 (higher when drawing
+  at 60). All editable on the Pension page — estimate, not advice.
+- **`lump` (היוון):** Israeli law only allows capitalizing the pot **above** the statutory minimum
+  annuity (`pensionMinAnnuity`, קצבה מזערית ≈ ₪5,306/mo in 2026, CPI-indexed in the model):
+  ```
+  requiredPot = minAnnuity(inflated) × coefficient        // annuitized first (forced minimum annuity)
+  lumpGross   = pot − requiredPot                          // 0 if the pot can't even fund the minimum
+  exemptCap   = age ≥ exemptionFromAge ? exemptionPct% × ceiling(inflated) × 180 : 0
+  tax         = incomeTaxAnnual(max(0, lumpGross − exemptCap))
+  ```
+  The net lump lands in the default liquid account; the forced minimum annuity pays out monthly like
+  a regular annuity (with no further exemption if the lump consumed the exempt capital).
+
+The tax is computed **once on the combined annuity** of all pension accounts — one exemption per
+person, no matter how many pots pay it.
+
+Not modeled: severance-vs-annuity trade-offs (רצף קצבה / the 1.35 offset formula), קצבה מוכרת,
+survivor/disability insurance premiums inside the fund, and the comprehensive-fund 30%
+assured-yield mechanism.
+
+## Bituach Leumi old-age pension (קצבת אזרח ותיק)
+
+Optional (`assumptions.oldAge`): a CPI-linked, untaxed income of `monthly` (today's ₪, default the
+2026 single basic rate ₪1,838) from `fromAge` (default 70 — unconditional; from 67 it's
+income-tested). Seniority increments (+2%/insured year up to +50%) and deferral bonuses are the
+user's to fold into the amount.
+
+## Real estate & mortgages
+
+`state.realEstate.properties` appreciate at their own rate and may pay rent (own growth rate);
+`state.realEstate.loans` amortize **monthly**, one row per Israeli track (מסלול):
+
+| track | linkage | rate path |
+|---|---|---|
+| `fixed` (קל"צ) | none | constant |
+| `fixed_cpi` (קבועה צמודה) | CPI (plan inflation) on principal | constant |
+| `prime` (פריים) | none | drifts by `scenario.primeChangePp` linearly over `scenario.primeYears` |
+| `var5` (משתנה צמודה) | CPI | +`scenario.resetStepPp` every 60 months |
+| `var5ni` (משתנה לא צמודה) | none | +`scenario.resetStepPp` every 60 months |
+
+Methods: `spitzer` (annuity — the payment is recomputed each month from the current balance, rate
+and remaining term, which equals the classic constant payment for fixed unlinked loans and handles
+rate changes/linkage correctly) or `equal` (קרן שווה — equal principal, declining payments). The
+UI checks the Bank-of-Israel composition rule (≥⅓ fixed-rate, prime ≤⅔). Per projection year:
+
+- **Equity** (Σ value − Σ remaining principal) is added to **net worth** — never to liquid or
+  FIRE-eligible assets (the house can't fund spending in the model).
+- **Rent** adds to income; **mortgage payments** add to outgoings
+  (`net = income − spend − mortgagePay`).
+
+No purchase/sale events, purchase tax, rental tax (up to the exemption ceiling this is roughly
+right), or vacancy are modeled.
+
+## Monte Carlo
+
+`monteCarlo(state)` re-runs the projection `assumptions.mc.sims` times. Each run draws, per
+**account type per year**, a return shock `N(0, vol_type)` added to the expected return (one shock
+per type — all taxable accounts move together; grants' post-vest accounts shock as `rsu`). FX,
+inflation, salary, spending, vest pricing, and property growth stay deterministic, so true risk is
+somewhat understated. Outputs: success rate (share of paths surviving to `endAge`), net-worth
+percentile bands per year (p10/p25/p50/p75/p90), the final-net-worth distribution, and the median
+depletion age of failing paths. `safeFireAge(state, confidence)` finds the earliest retirement age
+whose success rate meets the target confidence (200 paths per candidate age). A grant's vested
+shares come from its dated schedule when it has one (events dated on/before the as-of date count as
+vested; the manual `vestedShares` field is ignored).
+
+## Coast & Barista FIRE
+
+- `coastFireAge`: the earliest age `c` such that, if all saving stops at `c` (no contributions, no
+  vests, no surplus — income assumed to exactly cover spending; balances only compound), retiring
+  at the configured retirement age still survives to `endAge`.
+- `baristaFireAge(monthly, untilAge)`: the earliest full-retirement age if a part-time net income
+  (inflation-grown) continues from that age until `untilAge`.
 
 ## Withdrawals & capital-gains tax
 
