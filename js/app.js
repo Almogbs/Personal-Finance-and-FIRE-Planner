@@ -458,6 +458,16 @@ function mountPage() {
         if (!isNaN(age)) { st.profile.fireAge = age; state.update(() => {}); remountPage(); }
         break;
       }
+      case "fire-scn-toggle": {
+        const pg = FIRE.ui.pages.fire;
+        if (el.dataset.kind === "coast") pg.showCoastProj = !pg.showCoastProj;
+        else pg.showBaristaProj = !pg.showBaristaProj;
+        pg.renderScenarioBlock(el.dataset.kind, pageEl);
+        // Refresh the toggle button label without recomputing everything.
+        el.textContent = "📈 " + ((el.dataset.kind === "coast" ? pg.showCoastProj : pg.showBaristaProj) ? "Hide" : "Show") + " projection";
+        el.classList.toggle("ghost");
+        break;
+      }
       case "find-earliest": {
         const e = FIRE.engine.earliestFireAge(st);
         const out = document.getElementById(el.dataset.target || "earliest-out");
@@ -576,7 +586,7 @@ function mountPage() {
       }
     });
     st.predictions.baselineSavedAt = new Date().toISOString();
-    st.predictions.accounts = p.accountsMeta.map((a) => ({ id: a.id, name: a.name }));
+    st.predictions.accounts = p.accountsMeta.map((a) => ({ id: a.id, name: a.name, kind: a.kind }));
     st.predictions.years = years;
     state.update(() => {});
     remountPage();
@@ -667,6 +677,20 @@ function mountPage() {
     const el = e.target;
     numTooltip(el);
     if (el.id === "cloud-worker-url") { setCloudConfig("cloudApiBaseUrl", el.value); return; }
+    // Coast/Barista scenario-age slider (FIRE tab) — page-local, not in state.
+    if (el.dataset && el.dataset.fireproj) {
+      const v = parseInt(el.value, 10);
+      // sync the twin range/number input
+      pageEl.querySelectorAll('[data-fireproj="' + el.dataset.fireproj + '"]').forEach((sib) => { if (sib !== el) sib.value = el.value; });
+      FIRE.ui.pages.fire.setScenarioAge(el.dataset.fireproj, v, pageEl);
+      return;
+    }
+    // Predictions chart: include/exclude pension toggle (display-only).
+    if (el.dataset && el.dataset.predpension != null) {
+      FIRE.ui.pages.predictions.showPension = el.checked;
+      FIRE.ui.pages.predictions.renderChart(pageEl);
+      return;
+    }
     if (el.id === "cloud-google-client-id") { setCloudConfig("googleClientId", el.value); return; }
     // Expense-tracker cell (month × category).
     if (el.dataset && el.dataset.trkm) {

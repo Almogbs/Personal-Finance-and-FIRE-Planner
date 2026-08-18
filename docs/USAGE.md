@@ -78,6 +78,9 @@ The theoretical FIRE target maths, kept separate from your real spending:
   expenses, let the portfolio compound) and still retire at your configured retirement age.
 - **☕ Barista FIRE** — set a part-time net income and until-age; shows the earliest age you could
   leave full-time work with that income bridging the gap.
+- **📈 Show projection** (per scenario, collapsed by default) — unfolds a Projections-style view of
+  the coast/barista path: an age slider (defaults to the earliest computed age), a
+  baseline-vs-scenario net-worth chart, and a year-by-year table with a "coast" phase marker.
 - The earliest-age searches and sensitivity chart compute in the background (a short "computing…"
   appears while sliders move).
 

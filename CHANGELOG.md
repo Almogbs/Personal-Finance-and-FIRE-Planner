@@ -3,6 +3,18 @@
 All notable changes are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## 1.27.0
+
+- **Coast & Barista projection expanders** — each panel on the FIRE tab gains a **📈 Show projection**
+  button that unfolds a full Projections-style view of the scenario (collapsed by default so it takes
+  no space): an **age slider** (defaults to the computed earliest age), a **baseline-vs-scenario
+  net-worth chart**, a survival/final-net-worth summary, and a **year-by-year table** (year, exact
+  age, phase — including a "coast" phase — income, spend, withdrawals, per-group balances, total,
+  liquid). Everything recomputes live as you drag the age.
+- **Predictions chart** — new **"Include pension"** toggle (exclude pension balances from both the
+  predicted and actual lines, display-only) and **denser horizontal gridlines** (10 ticks) so values
+  are readable off the axis. Baselines saved from now on remember each account's type.
+
 ## 1.26.1
 
 - **Spending total follows the Edit-list chips** — the line under the categories table now sums the

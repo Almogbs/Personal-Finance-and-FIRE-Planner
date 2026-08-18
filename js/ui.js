@@ -1328,6 +1328,8 @@
   /* ============================ PREDICTIONS ============================= */
   const predictions = {
     selYear: null,
+    // Display-only: include pension balances in the predicted-vs-actual chart.
+    showPension: true,
     // All calendar years shown: baseline years ∪ recorded-actual years.
     allYears(pr) {
       const set = {};
@@ -1364,7 +1366,9 @@
         "</div>" +
         '<div id="pred-grid" class="pred-grid"></div>' +
         '<div class="panel"><h3>Selected year — per-account prediction vs actual</h3><div id="pred-detail"></div></div>' +
-        '<div class="panel"><h3>Predicted vs actual net worth</h3><canvas id="pred-chart" height="240"></canvas></div>';
+        '<div class="panel"><h3>Predicted vs actual net worth</h3>' +
+          '<div class="toolbar" style="margin-bottom:6px"><label class="switch"><input type="checkbox" data-predpension="1"' + (this.showPension ? " checked" : "") + "> Include pension</label></div>" +
+          '<canvas id="pred-chart" height="260"></canvas></div>';
       if (this.selYear == null) this.selYear = nowYear;
       this.update(el);
     },
@@ -1470,7 +1474,17 @@
         totD.style.color = gd == null ? "inherit" : gd >= 0 ? "var(--ok)" : "var(--bad)";
       }
     },
-    // Chart: predicted line + actual points, across all years.
+    // Chart: predicted line + actual points, across all years. Pension can be
+    // excluded (display-only); denser y-gridlines to read values off the axis.
+    pensionIds(st, pr) {
+      const ids = {};
+      const kindOf = {};
+      st.accounts.forEach((a) => (kindOf[a.id] = a.kind));
+      const accs = (pr.accounts && pr.accounts.length) ? pr.accounts : [];
+      accs.forEach((a) => { if (a.kind === "pension" || kindOf[a.id] === "pension") ids[a.id] = true; });
+      st.accounts.forEach((a) => { if (a.kind === "pension") ids[a.id] = true; });
+      return ids;
+    },
     renderChart(el) {
       const st = S();
       const pr = st.predictions;
@@ -1478,11 +1492,20 @@
       const baseByYear = this.baseByYear(pr);
       const cv = el.querySelector("#pred-chart");
       if (cv && years.length) {
+        const penIds = this.showPension ? null : this.pensionIds(st, pr);
+        const val = (rec) => {
+          if (!rec) return null;
+          if (!penIds) return rec.total;
+          let pen = 0;
+          Object.keys(rec.perAccount || {}).forEach((id) => { if (penIds[id]) pen += rec.perAccount[id] || 0; });
+          return rec.total - pen;
+        };
         C.line(cv, {
           labels: years,
+          yTicks: 10,
           series: [
-            { name: "Predicted", data: years.map((y) => (baseByYear[y] ? baseByYear[y].total : null)), color: "#2f7ed8" },
-            { name: "Actual", data: years.map((y) => ((pr.actuals || {})[y] ? pr.actuals[y].total : null)), color: "#59a14f" },
+            { name: "Predicted" + (penIds ? " (excl. pension)" : ""), data: years.map((y) => val(baseByYear[y])), color: "#2f7ed8" },
+            { name: "Actual" + (penIds ? " (excl. pension)" : ""), data: years.map((y) => val((pr.actuals || {})[y])), color: "#59a14f" },
           ],
         });
       }
@@ -2163,6 +2186,14 @@ mount(el) {
 
   /* ============================ FIRE ==================================== */
   const fire = {
+    // Coast/Barista projection expanders (collapsed by default; scenario ages
+    // default to the computed earliest and are adjustable via slider).
+    showCoastProj: false,
+    showBaristaProj: false,
+    coastAge: null,
+    baristaAge: null,
+    _coastEarliest: null,
+    _baristaEarliest: null,
     mount(el) {
       el.innerHTML =
         "<h1>🔥 FIRE target</h1>" +
@@ -2189,6 +2220,8 @@ mount(el) {
             '<div id="fire-barista"></div>' +
           "</div>" +
         "</div>" +
+        '<div id="fire-coast-proj"></div>' +
+        '<div id="fire-barista-proj"></div>' +
         '<div class="panel"><h3>Sensitivity: years to FIRE target vs return</h3><canvas id="fire-sens" height="240"></canvas>' +
           '<p class="hint">For a range of expected taxable / money-market returns, the years until your projected non-pension assets reach the fixed-spend FIRE target above.</p></div>' +
         '<div id="fire-mc"></div>';
@@ -2247,41 +2280,157 @@ mount(el) {
       const coast = el.querySelector("#fire-coast");
       if (coast) {
         const c = FIRE.engine.coastFireAge(st);
-        coast.innerHTML = c.found
+        this._coastEarliest = c.found ? c.age : null;
+        coast.innerHTML = (c.found
           ? '<div class="callout"><b>Coast from age ' + c.age + " — " + eventLabel(st, c.age) + "</b> " +
             (c.yearsAway <= 0 ? "(you've already coasted past it 🎉)" : "(" + c.yearsAway + " year" + (c.yearsAway === 1 ? "" : "s") + " away)") +
             ": stop all contributions/savings then, cover expenses from income only, and retiring in " + eventLabel(st, st.profile.fireAge) + " still survives to " + st.profile.endAge + ".</div>"
-          : '<div class="callout"><span class="bad">Not coastable</span> — even saving until retirement, the plan doesn\'t survive at the current retirement age. Lower spending or retire later.</div>';
+          : '<div class="callout"><span class="bad">Not coastable</span> — even saving until retirement, the plan doesn\'t survive at the current retirement age. Lower spending or retire later.</div>') +
+          '<div class="toolbar" style="margin-top:8px"><button class="btn small' + (this.showCoastProj ? "" : " ghost") + '" data-action="fire-scn-toggle" data-kind="coast">📈 ' + (this.showCoastProj ? "Hide" : "Show") + " projection</button></div>";
       }
       // Barista FIRE.
       const barista = el.querySelector("#fire-barista");
       if (barista) {
         const bcfg = st.assumptions.barista || {};
         const b = FIRE.engine.baristaFireAge(st, bcfg.monthly || 0, bcfg.untilAge || 60);
-        barista.innerHTML = b.found
+        this._baristaEarliest = b.found ? b.age : null;
+        barista.innerHTML = (b.found
           ? '<div class="callout"><b>Leave full-time at age ' + b.age + " — " + eventLabel(st, b.age) + "</b> " +
             (b.yearsAway <= 0 ? "(you could switch now 🎉)" : "(" + b.yearsAway + " year" + (b.yearsAway === 1 ? "" : "s") + " away)") +
             ", keeping <b>" + money(bcfg.monthly || 0) + "/mo</b> net part-time income (inflation-grown) until age " + (bcfg.untilAge || 60) + " — the plan survives to " + st.profile.endAge + ".</div>"
-          : '<div class="callout"><span class="bad">No age works</span> with this part-time income — raise it, extend it, or cut spending.</div>';
+          : '<div class="callout"><span class="bad">No age works</span> with this part-time income — raise it, extend it, or cut spending.</div>') +
+          '<div class="toolbar" style="margin-top:8px"><button class="btn small' + (this.showBaristaProj ? "" : " ghost") + '" data-action="fire-scn-toggle" data-kind="barista">📈 ' + (this.showBaristaProj ? "Hide" : "Show") + " projection</button></div>";
       }
+      // Scenario projection blocks (collapsed unless opened).
+      this.renderScenarioBlock("coast", el);
+      this.renderScenarioBlock("barista", el);
       // Sensitivity: years until non-pension assets reach the fixed-spend target.
       const sens = el.querySelector("#fire-sens");
       if (sens) {
         const base = FIRE.state.clone(st);
-        const returns = [2, 3, 4, 5, 6, 7, 8, 9, 10];
-        const years = returns.map((r) => {
-          const tt = FIRE.state.clone(base);
-          tt.accounts.forEach((a) => { if (a.kind === "taxable" || a.kind === "money_market") a.expectedReturn = r; });
-          (tt.income.grants || []).forEach((g) => { g.expectedGrowthPct = r + 1; });
-          const pp = FIRE.engine.project(tt);
-          const hit = pp.rows.find((row) => row.nonPension >= pp.targets.target);
-          return hit ? hit.age - pp.A0 : null;
-        });
-        C.bar(sens, {
-          labels: returns.map((r) => r + "%"),
-          series: [{ name: "Years to target", data: years.map((y) => (y == null ? 0 : y)), color: "#f28e2b" }],
-        });
+        this.renderSensitivity(sens, base);
       }
+    },
+    /* ---- Coast / Barista projection expanders ---------------------------- */
+    // Build the what-if state for a scenario at a given age.
+    scenarioState(kind, age) {
+      const st = S();
+      const t = FIRE.state.clone(st);
+      if (kind === "coast") {
+        t._coastFrom = age;
+      } else {
+        const b = st.assumptions.barista || {};
+        t.profile.fireAge = age;
+        t.income.extra = (t.income.extra || []).concat([{
+          id: "__barista__", name: "Part-time (barista)", monthlyAmount: b.monthly || 0,
+          startAge: age, endAge: b.untilAge || age, growthPct: t.assumptions.inflation || 0,
+        }]);
+      }
+      return t;
+    },
+    renderScenarioBlock(kind, el) {
+      const host = el.querySelector(kind === "coast" ? "#fire-coast-proj" : "#fire-barista-proj");
+      if (!host) return;
+      const open = kind === "coast" ? this.showCoastProj : this.showBaristaProj;
+      if (!open) { host.innerHTML = ""; return; }
+      const st = S();
+      const A0 = Math.round(st.profile.currentAge);
+      const maxAge = kind === "coast" ? Math.round(st.profile.fireAge) : st.profile.endAge;
+      const earliest = kind === "coast" ? this._coastEarliest : this._baristaEarliest;
+      let age = kind === "coast" ? this.coastAge : this.baristaAge;
+      if (age == null) age = earliest != null ? earliest : A0;
+      age = Math.max(A0, Math.min(maxAge, age));
+      if (kind === "coast") this.coastAge = age; else this.baristaAge = age;
+      host.innerHTML =
+        '<div class="panel"><h3>' + (kind === "coast" ? "🏖️ Coast projection" : "☕ Barista projection") + "</h3>" +
+          '<div class="control"><label>' + (kind === "coast" ? "Coast (stop saving) from age" : "Leave full-time at age") +
+            ' <b class="fire-scn-agelbl" data-kind="' + kind + '">' + age + " — " + eventLabel(st, age) + "</b></label>" +
+            '<div class="ctl-row">' +
+              '<input type="range" data-fireproj="' + kind + '" min="' + A0 + '" max="' + maxAge + '" step="1" value="' + age + '">' +
+              '<input type="number" class="num" data-fireproj="' + kind + '" min="' + A0 + '" max="' + maxAge + '" step="1" value="' + age + '">' +
+            "</div></div>" +
+          '<div class="fire-scn-body" data-kind="' + kind + '"></div>' +
+        "</div>";
+      this.renderScenarioBody(kind, host);
+    },
+    renderScenarioBody(kind, host) {
+      const body = host.querySelector(".fire-scn-body");
+      if (!body) return;
+      const st = S();
+      const age = kind === "coast" ? this.coastAge : this.baristaAge;
+      const t = this.scenarioState(kind, age);
+      const p = FIRE.engine.project(t);
+      const pBase = FIRE.engine.project(st);
+      const bcfg = st.assumptions.barista || {};
+
+      body.innerHTML =
+        '<div class="callout">' +
+          (p.survives ? '<span class="ok">✓ Survives to ' + st.profile.endAge + "</span>" : '<span class="bad">✕ Depletes ' + eventLabel(st, p.depletionAge) + "</span>") +
+          (kind === "coast"
+            ? " — stop saving from " + eventLabel(st, age) + ", retire " + eventLabel(st, st.profile.fireAge) + "."
+            : " — full-time until " + eventLabel(st, age) + ", then " + money(bcfg.monthly || 0) + "/mo part-time until age " + (bcfg.untilAge || age) + ".") +
+          " Final net worth <b>" + money(p.endNetWorth) + "</b> vs baseline " + money(pBase.endNetWorth) +
+          " (<b>" + (p.endNetWorth - pBase.endNetWorth >= 0 ? "+" : "") + money(p.endNetWorth - pBase.endNetWorth) + "</b>)." +
+        "</div>" +
+        '<canvas class="fire-scn-chart" height="240"></canvas>' +
+        '<div class="table-wrap tall" style="max-height:340px;margin-top:12px"><table class="grid tiny fire-scn-table"></table></div>' +
+        (kind === "coast" ? '<p class="hint">During "coast" years income is assumed to exactly cover spending — nothing is saved, nothing is withdrawn (that\'s the definition of coasting).</p>' : "");
+
+      // Chart: scenario vs baseline net worth (+ scenario liquid).
+      C.line(body.querySelector(".fire-scn-chart"), {
+        labels: p.rows.map((r) => r.year),
+        series: [
+          { name: "Baseline total", data: pBase.rows.map((r) => r.total), color: "#bab0ac" },
+          { name: (kind === "coast" ? "Coast" : "Barista") + " total", data: p.rows.map((r) => r.total), color: "#2f7ed8" },
+          { name: (kind === "coast" ? "Coast" : "Barista") + " liquid", data: p.rows.map((r) => r.liquid), color: "#59a14f" },
+        ],
+      });
+
+      // Projections-style year-by-year table for the scenario.
+      const groups = p.groupsMeta;
+      const gVal = (r, g) => g.ids.reduce((s, id) => s + (r.perAccount[id] || 0), 0);
+      const coastFrom = kind === "coast" ? age : null;
+      let head = "<thead><tr><th>Year</th><th>Age</th><th>Phase</th><th>Income</th><th>Spend</th><th>Withdrawn</th>" +
+        groups.map((g) => "<th>" + escapeHtml(shortName(g.name)) + "</th>").join("") +
+        "<th>Total</th><th>Liquid</th></tr></thead>";
+      let bodyRows = "<tbody>" + p.rows.map((r) => {
+        const isRet = r.age === Math.round(t.profile.fireAge);
+        const isStart = coastFrom != null && r.age === coastFrom;
+        const cls = isRet || isStart ? ' class="fire-row"' : (p.depletionAge && r.age === p.depletionAge ? ' class="dep-row"' : "");
+        const phase = r.working ? (coastFrom != null && r.age >= coastFrom ? "coast" : "work") : "retire";
+        const aEnd = ageAtYearEnd(st, r.year);
+        return "<tr" + cls + "><td>" + r.year + "</td><td>" + (aEnd != null ? fmtAgeYM(aEnd) : r.age) + "</td><td>" + phase + "</td>" +
+          "<td>" + money(r.incomeTotal) + "</td><td>" + money(r.spend + r.mortgagePay) + "</td><td>" + money(r.withdrawalNet) + "</td>" +
+          groups.map((g) => "<td>" + money(gVal(r, g)) + "</td>").join("") +
+          "<td><b>" + money(r.total) + "</b></td><td>" + money(r.liquid) + "</td></tr>";
+      }).join("") + "</tbody>";
+      body.querySelector(".fire-scn-table").innerHTML = head + bodyRows;
+    },
+    // Slider handler (app.js): update the age label + body only, keeping the
+    // slider mounted so it doesn't lose focus mid-drag.
+    setScenarioAge(kind, v, el) {
+      if (isNaN(v)) return;
+      if (kind === "coast") this.coastAge = v; else this.baristaAge = v;
+      const st = S();
+      const lbl = el.querySelector('.fire-scn-agelbl[data-kind="' + kind + '"]');
+      if (lbl) lbl.textContent = v + " — " + eventLabel(st, v);
+      const host = el.querySelector(kind === "coast" ? "#fire-coast-proj" : "#fire-barista-proj");
+      if (host) this.renderScenarioBody(kind, host);
+    },
+    renderSensitivity(sens, base) {
+      const returns = [2, 3, 4, 5, 6, 7, 8, 9, 10];
+      const years = returns.map((r) => {
+        const tt = FIRE.state.clone(base);
+        tt.accounts.forEach((a) => { if (a.kind === "taxable" || a.kind === "money_market") a.expectedReturn = r; });
+        (tt.income.grants || []).forEach((g) => { g.expectedGrowthPct = r + 1; });
+        const pp = FIRE.engine.project(tt);
+        const hit = pp.rows.find((row) => row.nonPension >= pp.targets.target);
+        return hit ? hit.age - pp.A0 : null;
+      });
+      C.bar(sens, {
+        labels: returns.map((r) => r + "%"),
+        series: [{ name: "Years to target", data: years.map((y) => (y == null ? 0 : y)), color: "#f28e2b" }],
+      });
     },
   };
 

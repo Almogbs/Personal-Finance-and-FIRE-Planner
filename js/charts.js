@@ -96,7 +96,7 @@
     const TH = theme();
     ctx.strokeStyle = TH.grid; ctx.fillStyle = TH.tick; ctx.font = "11px system-ui, sans-serif";
     ctx.textAlign = "right"; ctx.textBaseline = "middle";
-    const ticks = 5;
+    const ticks = cfg.yTicks || 5;
     for (let t = 0; t <= ticks; t++) {
       const v = min + (t / ticks) * (max - min);
       const yy = y(v);
