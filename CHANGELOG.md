@@ -3,6 +3,12 @@
 All notable changes are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## 1.28.1
+
+- **Coast/Barista projection expanders now include the exact Projections-style
+  "All entities over time (stacked)" chart** (per-group stacked bars) for the scenario, side by side
+  with the net-worth-vs-baseline comparison line.
+
 ## 1.28.0
 
 - **Draggable spending categories** — every category row has a ⠿ handle: drag to **reorder** within

@@ -2394,11 +2394,28 @@ mount(el) {
           " Final net worth <b>" + money(p.endNetWorth) + "</b> vs baseline " + money(pBase.endNetWorth) +
           " (<b>" + (p.endNetWorth - pBase.endNetWorth >= 0 ? "+" : "") + money(p.endNetWorth - pBase.endNetWorth) + "</b>)." +
         "</div>" +
-        '<canvas class="fire-scn-chart" height="240"></canvas>' +
+        '<div class="grid-2" style="margin-top:12px">' +
+          '<div><h3>All entities over time (stacked)</h3><canvas class="fire-scn-stack" height="260"></canvas></div>' +
+          '<div><h3>Net worth vs baseline</h3><canvas class="fire-scn-chart" height="260"></canvas></div>' +
+        "</div>" +
         '<div class="table-wrap tall" style="max-height:340px;margin-top:12px"><table class="grid tiny fire-scn-table"></table></div>' +
         (kind === "coast" ? '<p class="hint">During "coast" years income is assumed to exactly cover spending — nothing is saved, nothing is withdrawn (that\'s the definition of coasting).</p>' : "");
 
-      // Chart: scenario vs baseline net worth (+ scenario liquid).
+      // Stacked per-group chart — same as the Projections tab's
+      // "All entities over time (stacked)", for the scenario.
+      const groups = p.groupsMeta;
+      const gVal = (r, g) => g.ids.reduce((s, id) => s + (r.perAccount[id] || 0), 0);
+      C.bar(body.querySelector(".fire-scn-stack"), {
+        labels: p.rows.map((r) => r.year),
+        stacked: true,
+        series: groups.map((g, i) => ({
+          name: g.name,
+          color: C.PALETTE[i % C.PALETTE.length],
+          data: p.rows.map((r) => gVal(r, g)),
+        })),
+      });
+
+      // Companion: scenario vs baseline net worth (+ scenario liquid).
       C.line(body.querySelector(".fire-scn-chart"), {
         labels: p.rows.map((r) => r.year),
         series: [
@@ -2409,8 +2426,6 @@ mount(el) {
       });
 
       // Projections-style year-by-year table for the scenario.
-      const groups = p.groupsMeta;
-      const gVal = (r, g) => g.ids.reduce((s, id) => s + (r.perAccount[id] || 0), 0);
       const coastFrom = kind === "coast" ? age : null;
       let head = "<thead><tr><th>Year</th><th>Age</th><th>Phase</th><th>Income</th><th>Spend</th><th>Withdrawn</th>" +
         groups.map((g) => "<th>" + escapeHtml(shortName(g.name)) + "</th>").join("") +
