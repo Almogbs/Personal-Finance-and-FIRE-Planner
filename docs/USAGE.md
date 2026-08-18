@@ -54,9 +54,10 @@ Global levers (drag the sliders):
 - **Inflation** and **pension annuity coefficient**.
 - **Real mode** — show everything in today's ₪.
 - **Default expected returns by type** — seed new accounts and drive future RSU vest pricing.
-- **Withdrawal order in retirement** — reorder (↑/↓) which account types are drained first to cover a
-  retirement spending shortfall. Pension is only tapped after its access age (or when not annuitized),
-  and accounts you un-tick from **Count in FIRE** on the Accounts page are never drawn down.
+- **Withdrawal order in retirement** — drag rows by the ⠿ handle (or use ↑/↓) to set which account
+  types are drained first to cover a retirement spending shortfall. Types with no "Count in FIRE"
+  account are hidden (shown in a small note) and reappear in place when one becomes eligible. Pension
+  is only tapped after its access age (or when not annuitized).
 - **Israeli payroll rates** — used when salary is entered as gross on the Income page.
 - **↻ Fetch live USD/ILS** (optional) pulls the current rate from a public API (frankfurter.dev / ECB,
   with a fallback) — only when you click. No data is sent, just a currency pair.
@@ -130,7 +131,8 @@ Sequence-of-returns risk: the plan is re-run hundreds of times with randomized y
   delete** lists (the last list can't be deleted).
 - **Categories** — Housing, Food, Transport, … each with an amount, a **per month / per year**
   frequency (yearly items like vacations/insurance are amortized to a monthly-equivalent), age window,
-  own growth %, and an *inflate* toggle. A **total** line sums all active categories (monthly & yearly).
+  own growth %, and an *inflate* toggle. **Drag rows by the ⠿ handle** to reorder (or use ↑/↓), and
+  **drop a row onto an "Edit list" chip to move it to that list**. A **total** line sums all active categories (monthly & yearly).
   The doughnut shows the mix.
 - **Step changes (differential spending)** — take effect from a given age and persist onward. Two modes:
   - **Fixed amount** — override total spend (e.g. from age 31, ₪13,000/month), month/year frequency.

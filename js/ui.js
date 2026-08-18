@@ -80,6 +80,16 @@
     return (st.realEstate.loans || []).reduce((s, l) => s + FIRE.engine.loanSchedule(l, st.assumptions.inflation, st.realEstate.scenario || {}).payNow, 0);
   }
 
+  // Account kinds that participate in FIRE drawdown: at least one account of
+  // that kind is ticked "Count in FIRE" (grants always count as rsu). Kinds
+  // with nothing eligible are hidden from the withdrawal-order list.
+  function fireEligibleKinds(st) {
+    const has = {};
+    (st.accounts || []).forEach((a) => { if (a.includeInFire !== false) has[a.kind] = true; });
+    if ((st.income.grants || []).length) has.rsu = true;
+    return has;
+  }
+
   // A monthly/yearly frequency dropdown bound to an array item's `freq` field.
   function freqSelect(arr, id, freq) {
     return '<select data-arr="' + arr + '" data-id="' + id + '" data-field="freq" data-type="text">' +
@@ -428,18 +438,26 @@
   /* ==================== MARKET & ASSUMPTIONS ============================= */
   const assumptions = {
     mount(el) {
-      const wdOrder = (S().assumptions.withdrawalOrder || []);
+      const wdSt = S();
+      const wdEligible = fireEligibleKinds(wdSt);
+      // Show only kinds that have at least one FIRE-counted account; hidden
+      // kinds keep their position in the stored order and reappear if an
+      // account of that kind becomes eligible again.
+      const wdVisible = (wdSt.assumptions.withdrawalOrder || []).filter((k) => wdEligible[k]);
+      const wdHidden = (wdSt.assumptions.withdrawalOrder || []).filter((k) => !wdEligible[k]);
       const wdHtml =
         '<div class="panel"><h3>Withdrawal order in retirement</h3>' +
-          '<p class="hint">When spending exceeds income in retirement, your accounts are drained in this order — the top is spent first. Drag priority with the arrows. <b>Pension</b> is only ever tapped after its access age (or when not annuitized), and accounts you un-tick from <b>“Count in FIRE”</b> on the Accounts page are never drawn down.</p>' +
+          '<p class="hint">When spending exceeds income in retirement, your accounts are drained in this order — the top is spent first. <b>Drag rows by the ⠿ handle</b> or use the arrows. <b>Pension</b> is only ever tapped after its access age (or when not annuitized), and accounts you un-tick from <b>“Count in FIRE”</b> on the Accounts page are never drawn down.</p>' +
           '<ol class="wd-order">' +
-            wdOrder.map((k, i) =>
-              '<li><span class="wd-kind">' + kindLabel(k) + "</span>" +
+            wdVisible.map((k, i) =>
+              '<li data-wdrow="' + k + '"><span class="drag-handle" draggable="true" data-dragwd="' + k + '" title="Drag to reorder">⠿</span>' +
+                '<span class="wd-kind">' + kindLabel(k) + "</span>" +
                 '<span class="wd-btns">' +
                   '<button class="btn small" data-action="wd-up" data-kind="' + k + '"' + (i === 0 ? " disabled" : "") + ' title="Move up">↑</button>' +
-                  '<button class="btn small" data-action="wd-down" data-kind="' + k + '"' + (i === wdOrder.length - 1 ? " disabled" : "") + ' title="Move down">↓</button>' +
+                  '<button class="btn small" data-action="wd-down" data-kind="' + k + '"' + (i === wdVisible.length - 1 ? " disabled" : "") + ' title="Move down">↓</button>' +
                 "</span></li>").join("") +
           "</ol>" +
+          (wdHidden.length ? '<p class="hint">Hidden (no account of this type is “Count in FIRE”): ' + wdHidden.map(kindLabel).join(", ") + ".</p>" : "") +
         "</div>";
       el.innerHTML =
         "<h1>Market & Assumptions</h1>" +
@@ -805,7 +823,8 @@
         "</div>" +
         '<div class="panel"><h3>Categories — list “' + escapeHtml(editList ? editList.name : "") + '”' + (this.editListId === st.spending.activeListId ? " (active)" : "") + "</h3>" +
           '<div class="toolbar"><button class="btn small" data-action="add-cat">+ Add category</button></div>' +
-          '<div class="table-wrap"><table class="grid"><thead><tr><th>Name</th><th>Amount</th><th>Per</th><th>Start age</th><th>End age</th><th>Growth %</th><th>Inflate</th><th></th></tr></thead><tbody id="sp-cats"></tbody></table></div>' +
+          '<p class="hint" style="margin-top:0">Drag rows by the ⠿ handle to reorder (or use ↑/↓), and <b>drop a row onto an “Edit list” chip above to move it to that list</b>.</p>' +
+          '<div class="table-wrap"><table class="grid"><thead><tr><th></th><th>Name</th><th>Amount</th><th>Per</th><th>Start age</th><th>End age</th><th>Growth %</th><th>Inflate</th><th></th><th></th></tr></thead><tbody id="sp-cats"></tbody></table></div>' +
           '<div id="sp-total" class="callout"></div>' +
           ((st.realEstate && (st.realEstate.loans || []).length && st.realEstate.includeInPlan !== false)
             ? '<div style="margin-top:10px">' + toggle("Show the mortgage payment as a spending item here (it's always paid in the cashflow either way)", "spending.showMortgage", { remount: 1 }) + "</div>"
@@ -825,9 +844,10 @@
     renderCats(el) {
       const st = S();
       const cats = FIRE.state.listCategories(st, this.editListId);
-      el.querySelector("#sp-cats").innerHTML = cats.map((c) => {
+      el.querySelector("#sp-cats").innerHTML = cats.map((c, i) => {
         const f = (field, val, step, type) => '<input class="num" data-arr="spending.categories" data-id="' + c.id + '" data-field="' + field + '" data-type="' + (type || "float") + '" type="number" step="' + (step || 1) + '" value="' + val + '">';
-        return "<tr>" +
+        return '<tr data-catrow="' + c.id + '">' +
+          '<td class="drag-handle" draggable="true" data-dragcat="' + c.id + '" title="Drag to reorder, or drop onto a list chip to move it there">⠿</td>' +
           '<td><input data-arr="spending.categories" data-id="' + c.id + '" data-field="name" data-type="text" value="' + escapeHtml(c.name) + '"></td>' +
           "<td>" + f("monthly", c.monthly, 50) + "</td>" +
           "<td>" + freqSelect("spending.categories", c.id, c.freq) + "</td>" +
@@ -835,16 +855,18 @@
           "<td>" + f("endAge", c.endAge, 1, "int") + "</td>" +
           "<td>" + f("growthPct", c.growthPct, 0.1) + "</td>" +
           '<td style="text-align:center"><input type="checkbox" data-arr="spending.categories" data-id="' + c.id + '" data-field="inflate" data-type="bool"' + (c.inflate ? " checked" : "") + "></td>" +
+          '<td class="wd-btns"><button class="btn small" data-action="cat-up" data-id="' + c.id + '"' + (i === 0 ? " disabled" : "") + ' title="Move up">↑</button>' +
+            '<button class="btn small" data-action="cat-down" data-id="' + c.id + '"' + (i === cats.length - 1 ? " disabled" : "") + ' title="Move down">↓</button></td>' +
           '<td><button class="btn danger small" data-action="del-cat" data-id="' + c.id + '">✕</button></td>' +
           "</tr>";
-      }).join("") || '<tr><td colspan="8" class="hint" style="text-align:center">This list is empty — click “+ Add category”.</td></tr>';
+      }).join("") || '<tr><td colspan="10" class="hint" style="text-align:center">This list is empty — click “+ Add category”.</td></tr>';
       // Read-only mortgage row (driven by the Mortgage tab; opt-out below).
       const mortNow = st.spending.showMortgage !== false ? mortgageMonthlyNow(st) : 0;
       if (mortNow > 0) {
         el.querySelector("#sp-cats").innerHTML +=
-          '<tr class="trk-subtotal"><td>🏠 Mortgage <span class="hint">(auto — edit on the Mortgage tab)</span></td>' +
+          '<tr class="trk-subtotal"><td></td><td>🏠 Mortgage <span class="hint">(auto — edit on the Mortgage tab)</span></td>' +
           "<td><b>" + money(mortNow) + "</b></td><td>/ month</td>" +
-          '<td colspan="4" class="hint">until payoff · follows the rate scenario &amp; CPI linkage</td><td></td></tr>';
+          '<td colspan="5" class="hint">until payoff · follows the rate scenario &amp; CPI linkage</td><td></td></tr>';
       }
     },
     renderSteps(el) {
@@ -2436,6 +2458,6 @@ mount(el) {
 
   FIRE.ui = {
     pages: { dashboard, accounts, assumptions, income, spending, fire, tracker, pension, mortgage, projections, predictions, whatif, data },
-    money, pct, escapeHtml, fmtAgeYM, ageAtYearEnd, ageAtYearStart, yearAgeLabel, yearForAge, eventLabel,
+    money, pct, escapeHtml, fmtAgeYM, ageAtYearEnd, ageAtYearStart, yearAgeLabel, yearForAge, eventLabel, fireEligibleKinds,
   };
 })();

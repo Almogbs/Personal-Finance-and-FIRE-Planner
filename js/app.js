@@ -487,13 +487,35 @@ function mountPage() {
       }
       case "wd-up":
       case "wd-down": {
+        // Swap with the nearest VISIBLE neighbor — kinds hidden from the list
+        // (no FIRE-counted account) keep their stored position untouched.
         const kind = el.dataset.kind;
         const ord = st.assumptions.withdrawalOrder || [];
-        const i = ord.indexOf(kind);
-        if (i < 0) break;
-        const j = action === "wd-up" ? i - 1 : i + 1;
-        if (j < 0 || j >= ord.length) break;
+        const eligible = FIRE.ui.fireEligibleKinds(st);
+        const visible = ord.filter((k) => eligible[k]);
+        const vi = visible.indexOf(kind);
+        if (vi < 0) break;
+        const vj = action === "wd-up" ? vi - 1 : vi + 1;
+        if (vj < 0 || vj >= visible.length) break;
+        const i = ord.indexOf(kind), j = ord.indexOf(visible[vj]);
         const tmp = ord[i]; ord[i] = ord[j]; ord[j] = tmp;
+        state.update(() => {}); remountPage(); break;
+      }
+      case "cat-up":
+      case "cat-down": {
+        // Swap a category with its neighbor WITHIN the same list (positions in
+        // the global array are swapped, which preserves every other list's
+        // internal order).
+        const cats = st.spending.categories || [];
+        const cat = cats.find((c) => c.id === el.dataset.id);
+        if (!cat) break;
+        const lid = cat.listId || st.spending.activeListId;
+        const inList = cats.filter((c) => (c.listId || st.spending.activeListId) === lid);
+        const vi = inList.indexOf(cat);
+        const vj = action === "cat-up" ? vi - 1 : vi + 1;
+        if (vj < 0 || vj >= inList.length) break;
+        const i = cats.indexOf(cat), j = cats.indexOf(inList[vj]);
+        const tmp = cats[i]; cats[i] = cats[j]; cats[j] = tmp;
         state.update(() => {}); remountPage(); break;
       }
       case "save-file": state.download(sanitizeName(st.meta.name) + ".json"); break;
@@ -826,6 +848,86 @@ function mountPage() {
 
   function cssEscape(s) { return s.replace(/"/g, '\\"'); }
 
+  /* ---- Drag & drop: spending categories + withdrawal order ----------------
+   * Only the ⠿ handles are draggable (so text selection inside inputs still
+   * works). Categories can be dropped on another category row (reorder within
+   * the list) or on an "Edit list" chip (move to that list). Withdrawal kinds
+   * reorder within the visible list.
+   *-------------------------------------------------------------------------*/
+  let dragCatId = null, dragWdKind = null, dropTargetEl = null;
+
+  function clearDropTarget() {
+    if (dropTargetEl) { dropTargetEl.classList.remove("drop-target"); dropTargetEl = null; }
+  }
+  function dropTargetFor(e) {
+    if (dragCatId) {
+      return e.target.closest("[data-catrow]") || e.target.closest('[data-action="sp-edit-list"]');
+    }
+    if (dragWdKind) return e.target.closest("[data-wdrow]");
+    return null;
+  }
+  function onDragStart(e) {
+    const cat = e.target.closest && e.target.closest("[data-dragcat]");
+    const wd = e.target.closest && e.target.closest("[data-dragwd]");
+    if (cat) { dragCatId = cat.dataset.dragcat; }
+    else if (wd) { dragWdKind = wd.dataset.dragwd; }
+    else return;
+    if (e.dataTransfer) { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", dragCatId || dragWdKind); }
+    const row = e.target.closest("[data-catrow],[data-wdrow]");
+    if (row) row.classList.add("dragging");
+  }
+  function onDragOver(e) {
+    const t = dropTargetFor(e);
+    if (!t) { clearDropTarget(); return; }
+    e.preventDefault(); // allow dropping here
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    if (t !== dropTargetEl) { clearDropTarget(); dropTargetEl = t; t.classList.add("drop-target"); }
+  }
+  function onDrop(e) {
+    const t = dropTargetFor(e);
+    clearDropTarget();
+    if (!t) return;
+    e.preventDefault();
+    const st = state.get();
+    if (dragCatId) {
+      const cats = st.spending.categories || [];
+      const cat = cats.find((c) => c.id === dragCatId);
+      dragCatId = null; dragWdKind = null;
+      if (!cat) return;
+      const chip = t.closest && t.closest('[data-action="sp-edit-list"]');
+      if (chip) {
+        // Move the category to the dropped-on list.
+        if (cat.listId !== chip.dataset.id) { cat.listId = chip.dataset.id; state.update(() => {}); remountPage(); }
+        return;
+      }
+      const targetCat = cats.find((c) => c.id === t.dataset.catrow);
+      if (!targetCat || targetCat === cat) return;
+      // Reorder: pull the dragged category out and re-insert next to the
+      // target — after it when dragging down, before it when dragging up.
+      // Moving one item never disturbs the other lists' relative order.
+      const fromIdx = cats.indexOf(cat), toIdx = cats.indexOf(targetCat);
+      cats.splice(fromIdx, 1);
+      cats.splice(cats.indexOf(targetCat) + (fromIdx < toIdx ? 1 : 0), 0, cat);
+      state.update(() => {}); remountPage();
+      return;
+    }
+    if (dragWdKind) {
+      const ord = st.assumptions.withdrawalOrder || [];
+      const from = ord.indexOf(dragWdKind);
+      const to = ord.indexOf(t.dataset.wdrow);
+      dragCatId = null; dragWdKind = null;
+      if (from < 0 || to < 0 || from === to) return;
+      const [k] = ord.splice(from, 1);
+      ord.splice(to, 0, k);
+      state.update(() => {}); remountPage();
+    }
+  }
+  function onDragEnd() {
+    clearDropTarget();
+    dragCatId = null; dragWdKind = null;
+    document.querySelectorAll(".dragging").forEach((n) => n.classList.remove("dragging"));
+  }
+
   function applyTheme() {
     const t = state.get().meta.theme === "dark" ? "dark" : "light";
     document.documentElement.setAttribute("data-theme", t);
@@ -851,6 +953,10 @@ function mountPage() {
     const app = document.getElementById("app");
     app.addEventListener("input", onInput);
     app.addEventListener("change", onChange);
+    app.addEventListener("dragstart", onDragStart);
+    app.addEventListener("dragover", onDragOver);
+    app.addEventListener("drop", onDrop);
+    app.addEventListener("dragend", onDragEnd);
     document.addEventListener("click", onClick);
     document.addEventListener("change", (e) => { if (e.target && e.target.id === "data-file") onFile(e); });
 

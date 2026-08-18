@@ -175,6 +175,14 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--brand); out
 .switch { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; }
 .switch input { width: 16px; height: 16px; accent-color: var(--brand); }
 
+/* Drag & drop (spending categories, withdrawal order) */
+.drag-handle { cursor: grab; color: var(--muted); user-select: none; text-align: center; font-size: 15px; }
+.drag-handle:active { cursor: grabbing; }
+tr.dragging, li.dragging { opacity: .45; }
+tr.drop-target td { border-top: 2px solid var(--brand); }
+li.drop-target { border-color: var(--brand) !important; box-shadow: 0 0 0 1px var(--brand); }
+.btn.drop-target { outline: 2px solid var(--warn); outline-offset: 2px; }
+
 /* Withdrawal-order list (Assumptions page) */
 .wd-order { list-style: none; counter-reset: wd; margin: 0; padding: 0; max-width: 460px; }
 .wd-order li {

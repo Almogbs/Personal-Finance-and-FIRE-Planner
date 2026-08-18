@@ -3,6 +3,18 @@
 All notable changes are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## 1.28.0
+
+- **Draggable spending categories** — every category row has a ⠿ handle: drag to **reorder** within
+  the list (drops after the target when dragging down, before when dragging up), or **drop onto an
+  “Edit list” chip to move the category to that list** (previously impossible without retyping).
+  ↑/↓ arrow buttons cover touch screens, where HTML5 drag-and-drop doesn't fire.
+- **Withdrawal order: draggable + only relevant types** — the list gets the same ⠿ drag handles
+  (arrows stay), and **account types with no “Count in FIRE” account are hidden** (e.g. an
+  un-ticked money market), listed in a small "Hidden" note instead. Hidden types keep their stored
+  position — they reappear in place if an account becomes eligible again — and the arrows/drag
+  correctly skip over them.
+
 ## 1.27.0
 
 - **Coast & Barista projection expanders** — each panel on the FIRE tab gains a **📈 Show projection**
