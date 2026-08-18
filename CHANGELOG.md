@@ -3,6 +3,16 @@
 All notable changes are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## 1.26.1
+
+- **Spending total follows the Edit-list chips** — the line under the categories table now sums the
+  list you're viewing ("Total of list “Lean”: …") instead of always showing the active list, with a
+  hint when the viewed list isn't the active one (the doughnut and projections still use the active
+  list; the 🏠 mortgage all-in suffix shows only for the active list).
+- **Vest editor marks post-retirement events** — vests dated in/after your retirement year were
+  already excluded from the projection (employment ends), but were labeled "future vest"; they now
+  show "after retirement — not counted ✗".
+
 ## 1.26.0
 
 - **Monte Carlo moved into the 🔥 FIRE tab** (own nav entry removed) — all risk analysis now lives

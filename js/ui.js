@@ -631,14 +631,16 @@
       const g = (st.income.grants || []).find((x) => x.id === this.selGrantId);
       if (!g) { host.innerHTML = ""; return; }
       const asOf = FIRE.state.refDate(st);
+      const retireY = yearForAge(st, st.profile.fireAge);
       const events = (g.vests || []).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
       const rows = events.map((v) => {
         const d = new Date(v.date);
         const past = !isNaN(d.getTime()) && d <= asOf;
+        const postRet = !past && !isNaN(d.getTime()) && d.getFullYear() >= retireY;
         return "<tr>" +
           '<td><input type="date" data-vestg="' + g.id + '" data-vestid="' + v.id + '" data-vfield="date" value="' + escapeHtml(v.date || "") + '"></td>' +
           '<td><input class="num" type="number" step="1" min="0" data-vestg="' + g.id + '" data-vestid="' + v.id + '" data-vfield="shares" value="' + (v.shares || 0) + '"></td>' +
-          '<td class="hint vest-when" data-grant="' + g.id + '" data-vest="' + v.id + '">' + (past ? "already vested ✓ (counted)" : "future vest") + "</td>" +
+          '<td class="hint vest-when" data-grant="' + g.id + '" data-vest="' + v.id + '">' + (past ? "already vested ✓ (counted)" : postRet ? '<span class="bad">after retirement (' + retireY + "+) — not counted ✗</span>" : "future vest") + "</td>" +
           '<td><button class="btn danger small" data-action="del-vest" data-grant="' + g.id + '" data-id="' + v.id + '">✕</button></td>' +
           "</tr>";
       }).join("") || '<tr><td colspan="4" class="hint" style="text-align:center">No dated vests yet — this grant still uses the flat “Sh./yr” model.</td></tr>';
@@ -663,11 +665,15 @@
       const vc = el.querySelector('.vested-comp[data-grant="' + grantId + '"]');
       if (vc) vc.textContent = FIRE.state.vestedSharesOf(st, g) + " (📅)";
       const asOf = FIRE.state.refDate(st);
+      const retireY = yearForAge(st, st.profile.fireAge);
       (g.vests || []).forEach((v) => {
         const cell = el.querySelector('.vest-when[data-grant="' + grantId + '"][data-vest="' + v.id + '"]');
         if (!cell) return;
         const d = new Date(v.date);
-        cell.textContent = !isNaN(d.getTime()) && d <= asOf ? "already vested ✓ (counted)" : "future vest";
+        const past = !isNaN(d.getTime()) && d <= asOf;
+        if (past) cell.textContent = "already vested ✓ (counted)";
+        else if (!isNaN(d.getTime()) && d.getFullYear() >= retireY) cell.innerHTML = '<span class="bad">after retirement (' + retireY + "+) — not counted ✗</span>";
+        else cell.textContent = "future vest";
       });
     },
     accountOptions(st, selectedId) {
@@ -873,13 +879,22 @@
       if (mortNow > 0) slices.push({ name: "🏠 Mortgage", value: mortNow, color: "#9c755f" });
       C.pie(el.querySelector("#sp-pie"), { doughnut: true, slices });
 
-      // Total of all active categories at the current age (monthly-equivalent).
-      const totMonthly = bd.reduce((s, b) => s + b.monthly, 0);
+      // Total of the list being EDITED (categories active at the current age,
+      // yearly items amortized to monthly) — follows the Edit-list chips, not
+      // just the active list.
+      const editId = this.editListId || st.spending.activeListId;
+      const editList = (st.spending.lists || []).find((l) => l.id === editId);
+      const isActive = editId === st.spending.activeListId;
+      const editCats = FIRE.state.listCategories(st, editId)
+        .filter((c) => age >= c.startAge && age <= c.endAge);
+      const totMonthly = editCats.reduce((s, c) => s + (c.freq === "yearly" ? (c.monthly || 0) / 12 : (c.monthly || 0)), 0);
       const totEl = el.querySelector("#sp-total");
       if (totEl) {
-        totEl.innerHTML = "<b>Total spending now:</b> " + money(totMonthly) + "/month · " + money(totMonthly * 12) + "/year" +
-          " (across " + bd.length + " active " + (bd.length === 1 ? "category" : "categories") + ")." +
-          (mortNow > 0 ? " Plus <b>🏠 mortgage " + money(mortNow) + "/mo</b> → <b>" + money(totMonthly + mortNow) + "/mo</b> all-in." : "") +
+        totEl.innerHTML = "<b>Total of list “" + escapeHtml(editList ? editList.name : "?") + "”:</b> " +
+          money(totMonthly) + "/month · " + money(totMonthly * 12) + "/year" +
+          " (across " + editCats.length + " active " + (editCats.length === 1 ? "category" : "categories") + ")." +
+          (isActive && mortNow > 0 ? " Plus <b>🏠 mortgage " + money(mortNow) + "/mo</b> → <b>" + money(totMonthly + mortNow) + "/mo</b> all-in." : "") +
+          (isActive ? "" : ' <span class="hint">Not the active list — projections &amp; the doughnut use the active one.</span>') +
           " Yearly items are shown as their monthly-equivalent here.";
       }
       const p = FIRE.engine.project(st);
