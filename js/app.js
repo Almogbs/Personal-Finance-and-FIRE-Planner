@@ -713,6 +713,20 @@ function mountPage() {
       FIRE.ui.pages.predictions.renderChart(pageEl);
       return;
     }
+    // Projections stacked chart: include/exclude pension (display-only).
+    if (el.dataset && el.dataset.stackpension != null) {
+      FIRE.ui.pages.projections.showPension = el.checked;
+      updatePage();
+      return;
+    }
+    // Coast/Barista scenario stacked chart: include/exclude pension.
+    if (el.dataset && el.dataset.scnpension) {
+      const k = el.dataset.scnpension;
+      FIRE.ui.pages.fire.scnShowPension[k] = el.checked;
+      const host = pageEl.querySelector(k === "coast" ? "#fire-coast-proj" : "#fire-barista-proj");
+      if (host) FIRE.ui.pages.fire.renderScenarioBody(k, host);
+      return;
+    }
     if (el.id === "cloud-google-client-id") { setCloudConfig("googleClientId", el.value); return; }
     // Expense-tracker cell (month × category).
     if (el.dataset && el.dataset.trkm) {

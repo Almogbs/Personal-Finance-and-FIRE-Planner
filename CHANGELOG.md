@@ -3,6 +3,13 @@
 All notable changes are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## 1.29.0
+
+- **"Include pension" toggle on the stacked charts** — both the Projections tab's "All entities over
+  time (stacked)" and the Coast/Barista expanders' stacked charts can now hide the pension stack
+  (display-only; group colors stay stable, all-zero groups drop out). Matches the toggle already on
+  the Predictions chart.
+
 ## 1.28.1
 
 - **Coast/Barista projection expanders now include the exact Projections-style

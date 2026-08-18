@@ -1181,6 +1181,8 @@
 
   /* ============================ PROJECTIONS ============================== */
   const projections = {
+    // Display-only: include pension accounts in the stacked chart.
+    showPension: true,
     // Plain-language timeline: consecutive years sharing the same income /
     // withdrawal regime are grouped into one phase ("From 2027–2030 …").
     phasesPanel(st) {
@@ -1241,7 +1243,9 @@
           toggle("Real (today's ₪)", "assumptions.realMode") +
           '<button class="btn small" data-action="export-csv">⬇ Export CSV</button>' +
         "</div>" +
-        '<div class="panel"><h3>All entities over time (stacked)</h3><canvas id="pr-stack" height="300"></canvas></div>' +
+        '<div class="panel"><h3>All entities over time (stacked)</h3>' +
+          '<div class="toolbar" style="margin-bottom:6px"><label class="switch"><input type="checkbox" data-stackpension="1"' + (this.showPension ? " checked" : "") + "> Include pension</label></div>" +
+          '<canvas id="pr-stack" height="300"></canvas></div>' +
         this.phasesPanel(S()) +
         '<div class="panel"><h3>Income vs spending</h3><canvas id="pr-io" height="260"></canvas>' +
           '<p class="hint">Income = net salary + extra + <b>net pension</b> (after tax). "Withdrawn for living" is the net cash pulled from your portfolio to cover the rest of spending; selling from taxable/RSU pots pays capital-gains tax, so the gross sale is larger.</p>' +
@@ -1259,12 +1263,19 @@
       const groups = p.groupsMeta; // aggregate holdings by account group
       const gVal = (r, g) => g.ids.reduce((s, id) => s + (r.perAccount[id] || 0), 0);
 
-      // Stacked per-group (e.g. one "Brokerage", one "Bank", one "Pension"…)
-      const series = groups.map((g, i) => ({
-        name: g.name,
-        color: C.PALETTE[i % C.PALETTE.length],
-        data: p.rows.map((r) => adj(gVal(r, g), r.k)),
-      }));
+      // Stacked per-group (e.g. one "Brokerage", one "Bank", one "Pension"…).
+      // The pension toggle drops pension accounts from the stack (display
+      // only; colors stay stable per group). All-zero groups disappear.
+      const kindOf = {};
+      p.accountsMeta.forEach((a) => (kindOf[a.id] = a.kind));
+      const series = groups.map((g, i) => {
+        const ids = this.showPension ? g.ids : g.ids.filter((id) => kindOf[id] !== "pension");
+        return {
+          name: g.name,
+          color: C.PALETTE[i % C.PALETTE.length],
+          data: p.rows.map((r) => adj(ids.reduce((s, id) => s + (r.perAccount[id] || 0), 0), r.k)),
+        };
+      }).filter((s) => s.data.some((v) => v > 0));
       C.bar(el.querySelector("#pr-stack"), { labels, stacked: true, series });
 
       // Income vs spending (incl. pension income and living withdrawals).
@@ -2214,6 +2225,8 @@ mount(el) {
     showBaristaProj: false,
     coastAge: null,
     baristaAge: null,
+    // Display-only: include pension in each scenario's stacked chart.
+    scnShowPension: { coast: true, barista: true },
     _coastEarliest: null,
     _baristaEarliest: null,
     mount(el) {
@@ -2395,24 +2408,33 @@ mount(el) {
           " (<b>" + (p.endNetWorth - pBase.endNetWorth >= 0 ? "+" : "") + money(p.endNetWorth - pBase.endNetWorth) + "</b>)." +
         "</div>" +
         '<div class="grid-2" style="margin-top:12px">' +
-          '<div><h3>All entities over time (stacked)</h3><canvas class="fire-scn-stack" height="260"></canvas></div>' +
+          '<div><h3>All entities over time (stacked)</h3>' +
+            '<div class="toolbar" style="margin-bottom:6px"><label class="switch"><input type="checkbox" data-scnpension="' + kind + '"' + (this.scnShowPension[kind] !== false ? " checked" : "") + "> Include pension</label></div>" +
+            '<canvas class="fire-scn-stack" height="260"></canvas></div>' +
           '<div><h3>Net worth vs baseline</h3><canvas class="fire-scn-chart" height="260"></canvas></div>' +
         "</div>" +
         '<div class="table-wrap tall" style="max-height:340px;margin-top:12px"><table class="grid tiny fire-scn-table"></table></div>' +
         (kind === "coast" ? '<p class="hint">During "coast" years income is assumed to exactly cover spending — nothing is saved, nothing is withdrawn (that\'s the definition of coasting).</p>' : "");
 
       // Stacked per-group chart — same as the Projections tab's
-      // "All entities over time (stacked)", for the scenario.
+      // "All entities over time (stacked)", for the scenario, with the same
+      // optional pension exclusion (display-only).
       const groups = p.groupsMeta;
       const gVal = (r, g) => g.ids.reduce((s, id) => s + (r.perAccount[id] || 0), 0);
+      const kindOf = {};
+      p.accountsMeta.forEach((a) => (kindOf[a.id] = a.kind));
+      const showPen = this.scnShowPension[kind] !== false;
       C.bar(body.querySelector(".fire-scn-stack"), {
         labels: p.rows.map((r) => r.year),
         stacked: true,
-        series: groups.map((g, i) => ({
-          name: g.name,
-          color: C.PALETTE[i % C.PALETTE.length],
-          data: p.rows.map((r) => gVal(r, g)),
-        })),
+        series: groups.map((g, i) => {
+          const ids = showPen ? g.ids : g.ids.filter((id) => kindOf[id] !== "pension");
+          return {
+            name: g.name,
+            color: C.PALETTE[i % C.PALETTE.length],
+            data: p.rows.map((r) => ids.reduce((s, id) => s + (r.perAccount[id] || 0), 0)),
+          };
+        }).filter((s) => s.data.some((v) => v > 0)),
       });
 
       // Companion: scenario vs baseline net worth (+ scenario liquid).
