@@ -3,6 +3,17 @@
 All notable changes are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## 1.30.1
+
+- **Fixed a one-year off-by-one in the "Income & withdrawals by phase" age ranges.** Both ends of each
+  phase were labelled with the age at *year-end*, but a phase runs from the **start** of its first year
+  to the **end** of its last. The start label was therefore a year late, which made each range read one
+  year shorter than the phase's own year count (`ages 29y 5m–37y 5m` for a 9-year phase) and opened a
+  phantom one-year gap between consecutive phases (`…–37y 5m` followed by `38y 5m–…`). Ranges now read
+  `ages 28y 5m–37y 5m` and consecutive phases meet exactly. Projection figures were never affected —
+  only the label. The no-birth-date fallback is unchanged, since its inclusive whole-age endpoints
+  already read continuously.
+
 ## 1.30.0
 
 - **RSU Section-102 tax is now charged on sale, not on vest.** Under the capital-gains track the taxable

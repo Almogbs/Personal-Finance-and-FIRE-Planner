@@ -1208,9 +1208,15 @@
       });
       const items = phases.map((ph) => {
         const yr = ph.y0 === ph.y1 ? String(ph.y0) : ph.y0 + "–" + ph.y1;
-        const aEnd0 = ageAtYearEnd(st, ph.y0), aEnd1 = ageAtYearEnd(st, ph.y1);
-        const ages = aEnd0 != null
-          ? (ph.y0 === ph.y1 ? "age " + fmtAgeYM(aEnd0) : "ages " + fmtAgeYM(aEnd0) + "–" + fmtAgeYM(aEnd1) + " at year-end")
+        // A phase spans from the START of its first year to the END of its last,
+        // so label the two ends accordingly. Using year-end for BOTH (as this
+        // did) shifts the range forward a year: it made the span read one year
+        // shorter than the phase's own `n`, and opened a phantom gap between
+        // consecutive phases. The integer fallback below needs no such fix — its
+        // endpoints are inclusive whole ages, so they already read continuously.
+        const aStart0 = ageAtYearStart(st, ph.y0), aEnd1 = ageAtYearEnd(st, ph.y1);
+        const ages = aStart0 != null
+          ? "ages " + fmtAgeYM(aStart0) + "–" + fmtAgeYM(aEnd1)
           : (ph.a0 === ph.a1 ? "age " + ph.a0 : "ages " + ph.a0 + "–" + ph.a1);
         const avg = (v) => v / ph.n;
         const parts = [];
@@ -1227,7 +1233,7 @@
       }).join("");
       const dep = p.depletionAge ? '<p class="hint" style="color:var(--bad)">⚠ Liquid assets are projected to run out in ' + eventLabel(st, p.depletionAge) + ".</p>" : "";
       return '<div class="panel"><h3>Income &amp; withdrawals by phase</h3>' +
-        '<p class="hint">Consecutive years with the same income/withdrawal pattern, grouped. Amounts are nominal ₪, averaged per year within each phase.</p>' +
+        '<p class="hint">Consecutive years with the same income/withdrawal pattern, grouped. Amounts are nominal ₪, averaged per year within each phase. Age ranges run from the start of the first year to the end of the last, so consecutive phases meet exactly.</p>' +
         '<ul class="phase-list">' + items + "</ul>" + dep + "</div>";
     },
     mount(el) {
