@@ -211,11 +211,14 @@
 
     // Sum active categories of the list in force at this age. Amounts are
     // "today's money" and (optionally) grow with inflation/own rate from the
-    // CURRENT age forward.
+    // CURRENT age forward. `endAge` is compared as `< endAge + 1` so it keeps
+    // its inclusive-whole-year meaning: identical for integer ages, and for the
+    // fractional ages the monthly engine passes it runs through the birthday
+    // after endAge rather than truncating the window by up to a year.
     const nowAge = state.profile.currentAge;
     let sum = 0;
     categoriesAt(state, age).forEach((c) => {
-      if (age >= c.startAge && age <= c.endAge) {
+      if (age >= c.startAge && age < (c.endAge || 0) + 1) {
         const g = c.inflate ? (c.growthPct != null ? c.growthPct : sp.growthPct) / 100 : 0;
         const yrs = Math.max(0, age - nowAge);
         sum += catMonthly(c) * Math.pow(1 + g, yrs);
@@ -229,7 +232,7 @@
     const nowAge = state.profile.currentAge;
     const out = [];
     categoriesAt(state, age).forEach((c) => {
-      if (age >= c.startAge && age <= c.endAge) {
+      if (age >= c.startAge && age < (c.endAge || 0) + 1) {
         const g = c.inflate ? (c.growthPct != null ? c.growthPct : sp.growthPct) / 100 : 0;
         const yrs = Math.max(0, age - nowAge);
         out.push({ name: c.name, monthly: catMonthly(c) * Math.pow(1 + g, yrs) });
@@ -523,57 +526,186 @@
     // capital (היוון פטור: pct × ceiling × 180 months) has been consumed.
     let lumpSecuredPot = 0, lumpExemptUsed = 0, lumpUsedExemption = false;
 
-    // The current year is partial: count only the whole MONTHS still ahead so
-    // deposits/vests line up with reality (e.g. mid-July → 6 monthly deposits
-    // left, and one RSU vest, not a full year). First row = end of this year.
+    /* ---- Monthly time base -------------------------------------------------
+     * The projection advances in CALENDAR MONTHS, from the as-of month through
+     * December of the final year, and aggregates each calendar year into one
+     * annual row — the shape every UI consumer expects. Starting at the as-of
+     * month is what makes the first year partial, so the old `firstYearFrac`
+     * fudge is gone.
+     *
+     * Everything that is a RATE converts to its monthly equivalent
+     * ((1+r)^(1/12)−1, so twelve months compound to exactly the annual rate).
+     * Everything that is a BOUNDARY (retirement, pension access, account
+     * access, category/stream/grant windows) is tested against the exact
+     * fractional age each month, so it lands on the real birthday instead of
+     * snapping to 1 January.
+     *----------------------------------------------------------------------*/
     const asOf = FIRE.state.refDate(state);
-    const monthsLeft = Math.max(0, Math.min(12, 12 - asOf.getMonth())); // Jan=0 → 12; Jul=6 → 6
-    const firstYearFrac = monthsLeft / 12;
+    const startYear = asOf.getFullYear();
+    const startMonth = asOf.getMonth();                  // 0 = January
+    const nYears = Math.max(1, Math.round(endAge - A0) + 1);
+    const totalMonths = nYears * 12 - startMonth;
+    const inflM = Math.pow(1 + infl, 1 / 12) - 1;
+    const monthlyRate = (annualPct) => Math.pow(1 + (annualPct || 0) / 100, 1 / 12) - 1;
+    const collectMonthly = !opts || opts.collectMonthly !== false;
+
+    // Exact age on the first day of a projection month. Uses the birth date
+    // when one is set (so boundaries land on the real birthday); otherwise
+    // advances `currentAge` one twelfth at a time.
+    const baseAge = state.profile.currentAge != null ? state.profile.currentAge : A0;
+    function exactAgeAtMonth(y, m, mi) {
+      const a = FIRE.state.exactAgeAt(state, new Date(y, m, 1));
+      return a != null ? a : baseAge + mi / 12;
+    }
+
+    const drawOrder = (state.assumptions.withdrawalOrder && state.assumptions.withdrawalOrder.length)
+      ? state.assumptions.withdrawalOrder
+      : WITHDRAW_PRIORITY;
+
+    /* Sell `needNet` of net cash from the liquid accounts in priority order.
+     * `Y` carries the year-to-date tax state, so a Section-102 ordinary slice
+     * realized in March stacks under one realized in November — the brackets
+     * settle per calendar year even though the cash moves monthly.
+     * Returns the amount still unfunded (0 when fully covered). */
+    function withdrawNet(needNet, exAge, Y, factor) {
+      for (const kind of drawOrder) {
+        if (needNet <= 1e-6) break;
+        for (const a of accs) {
+          if (needNet <= 1e-6) break;
+          if (a.kind !== kind) continue;
+          if (a.bal <= 0) continue;
+          // Money earmarked as NOT part of FIRE is never spent down in retirement.
+          if (!a.includeInFire) continue;
+          if (a.kind === "pension") {
+            if (pcfg.mode === "annuity") continue; // annuitized: not drawable
+            const access = a.accessAge || state.profile.pensionAccessAge;
+            if (exAge < access) continue;          // lump mode: locked until access
+          } else {
+            if (!a.liquid) continue;
+            if (a.accessAge && exAge < a.accessAge) continue;
+          }
+          if (a.isGrant) {
+            // Section-102 capital-gains track: the tax falls due HERE, on the
+            // sale. Ordinary slice at the marginal rate on this year's stack;
+            // appreciation above it at the grant's capital-gains rate.
+            const fullTax = grantSaleTax(a, a.bal, Y.ordStack, factor);
+            const deliverable = Math.max(0, a.bal - fullTax);
+            if (deliverable <= 1e-6) continue;
+            const takeNet = Math.min(needNet, deliverable);
+            const grossSale = takeNet >= deliverable - 1e-6
+              ? a.bal
+              : grantGrossForNet(a, takeNet, Y.ordStack, factor);
+            const ordSold = a.ord * (grossSale / a.bal);
+            const tax = grantSaleTax(a, grossSale, Y.ordStack, factor);
+            const netGot = Math.max(0, grossSale - tax);
+            a.bal -= grossSale;
+            a.ord = Math.max(0, a.ord - ordSold);
+            a.basis = a.ord;
+            Y.ordStack += ordSold;                 // later sales stack on top
+            needNet -= netGot;
+            Y.withdrawalNet += netGot;
+            Y.withdrawalGross += grossSale;
+            Y.withdrawalTax += tax;
+            Y.sources[a.id] = (Y.sources[a.id] || 0) + netGot;
+            continue;
+          }
+          const gainFrac = a.bal > 0 ? Math.max(0, (a.bal - a.basis) / a.bal) : 0;
+          const effRate = gainFrac * (a.cg / 100);  // effective tax per ₪ sold
+          const deliverable = a.bal * (1 - effRate);
+          const takeNet = Math.min(needNet, deliverable);
+          const grossSale = effRate < 1 ? takeNet / (1 - effRate) : takeNet;
+          a.bal -= grossSale;
+          a.basis = Math.max(0, a.basis - grossSale * (1 - gainFrac));
+          needNet -= takeNet;
+          Y.withdrawalNet += takeNet;
+          Y.withdrawalGross += grossSale;
+          Y.withdrawalTax += grossSale - takeNet;
+          Y.sources[a.id] = (Y.sources[a.id] || 0) + takeNet;
+        }
+      }
+      return Math.max(0, needNet);
+    }
+
+    // Fresh per-calendar-year accumulator: flows sum over the year, tax state
+    // accrues year-to-date and settles within the year.
+    function newYear(k, year, age) {
+      return {
+        k, year, age, workingMonths: 0, months: 0,
+        salary: 0, extra: 0, spend: 0, incomeTotal: 0, net: 0,
+        pensionGross: 0, pensionTax: 0, pensionNet: 0, oldAge: 0,
+        pensionLumpGross: 0, pensionLumpTax: 0, pensionLumpNet: 0,
+        rentIncome: 0, mortgagePay: 0,
+        withdrawalNet: 0, withdrawalGross: 0, withdrawalTax: 0, sources: {},
+        // year-to-date tax state
+        ordStack: 0, pensionGrossYTD: 0, pensionTaxYTD: 0,
+      };
+    }
 
     const rows = [];
-    let depletionAge = null;
+    const monthly = [];
+    let depletionAge = null, depletionExactAge = null;
+    // Cash float: monthly net flows land here. A negative float is funded
+    // immediately by selling (that is a real cash need); a positive float is
+    // invested at year end, which keeps the existing convention that a year's
+    // surplus starts compounding the following year.
+    let buffer = 0;
+    let Y = null;
 
-    for (let age = A0; age <= endAge; age++) {
-      const yf = age === A0 ? firstYearFrac : 1; // prorate the current (partial) year
-      const k = age - A0;
-      const rowYear = asOf.getFullYear() + k;
-      const working = age < fireAge;
+    for (let mi = 0; mi < totalMonths; mi++) {
+      const absMonth = startMonth + mi;
+      const year = startYear + Math.floor(absMonth / 12);
+      const month = absMonth % 12;                       // 0..11
+      const k = year - startYear;
+      const age = A0 + k;                                // integer age: row contract
+      const exAge = exactAgeAtMonth(year, month, mi);
+      const inflFactor = Math.pow(1 + infl, k);          // statutory year factor
+      const isYearEnd = month === 11 || mi === totalMonths - 1;
 
-      // 1) Growth on existing balances (partial in the current year). Pension &
-      //    study funds also skim an annual management fee off the balance.
-      //    Monte Carlo injects a per-year randomized return here.
+      if (!Y || Y.k !== k) {
+        Y = newYear(k, year, age);
+        // CPI-link the running annuity once per calendar year.
+        if (k > 0 && pcfg.cpiLinked) {
+          accs.forEach((a) => {
+            if (a.kind === "pension" && a.annuityGrossAnnual != null) a.annuityGrossAnnual *= 1 + infl;
+          });
+        }
+      }
+      Y.months++;
+
+      const working = exAge < fireAge;
+      const coasting = coastFrom != null && working && exAge >= coastFrom;
+      if (working) Y.workingMonths++;
+
+      // 1) Growth for one month, plus a twelfth of the annual balance fee.
       accs.forEach((a) => {
         const ret = opts && opts.returnOverride ? Math.max(-95, opts.returnOverride(a, k)) : a.ret;
-        a.bal *= Math.pow(1 + ret / 100, yf);
-        if ((a.kind === "pension" || a.kind === "study_fund") && a.feeBalance) a.bal *= Math.pow(1 - a.feeBalance / 100, yf);
+        a.bal *= 1 + monthlyRate(ret);
+        if ((a.kind === "pension" || a.kind === "study_fund") && a.feeBalance) {
+          a.bal *= Math.pow(1 - a.feeBalance / 100, 1 / 12);
+        }
       });
 
-      // Coast what-if: from coastFrom until retirement, no new savings land.
-      const coasting = coastFrom != null && working && age >= coastFrom;
-
-      // 2) Auto/employer contributions while working (prorated in year 0).
+      // 2) Auto/employer contributions — one month's worth, deposited monthly
+      //    so they start compounding in the month they are made.
       if (working && !coasting) {
         accs.forEach((a) => {
-          if (a.contrib > 0) deposit(a, a.contrib * 12 * Math.pow(1 + a.contribGrowth / 100, k) * yf);
+          if (a.contrib > 0) deposit(a, a.contrib * Math.pow(1 + a.contribGrowth / 100, k));
         });
       }
 
-      // 3) New grant vests, while employed (age < fireAge). Shares enter GROSS
-      //    with their ordinary slice recorded as deferred tax — under the
-      //    Section-102 capital-gains track nothing is owed until they are sold.
-      //    A grant with an explicit vesting schedule (dated events) uses it —
-      //    each event vests its own share count on its own date, priced at the
-      //    grant's growth compounded to that date. Events already in the past
-      //    are assumed to be included in `vestedShares`. Grants without a
-      //    schedule fall back to sharesPerYear within [startAge, stopAge).
+      // 3) Grant vests. Shares enter GROSS with their ordinary slice recorded
+      //    as deferred Section-102 tax — nothing is owed until they are sold.
+      //    Dated events vest in their own month; a flat sharesPerYear grant
+      //    vests a twelfth each month while inside its [startAge, stopAge) window.
       if (working && !coasting) {
         grantAccs.forEach(({ acc, grant }) => {
           const events = (grant.vests || []).filter((v) => v && v.date && (v.shares || 0) > 0);
           if (events.length) {
             events.forEach((v) => {
               const d = new Date(v.date);
-              if (isNaN(d.getTime()) || d.getFullYear() !== rowYear) return;
-              if (d <= asOf) return; // on/before as-of → already in the vested seed
+              if (isNaN(d.getTime())) return;
+              if (d.getFullYear() !== year || d.getMonth() !== month) return;
+              if (d <= asOf) return;             // already in the vested seed
               const yrs = Math.max(0, (d - asOf) / (365.25 * 24 * 3600 * 1000));
               const price = grant.sharePrice * Math.pow(1 + (grant.expectedGrowthPct || 0) / 100, yrs);
               const r = FIRE.state.grantNet(grant, usdIls, v.shares, price);
@@ -582,106 +714,72 @@
           } else {
             const start = grant.startAge != null ? grant.startAge : A0;
             const stop = grant.vestUntilRetire ? fireAge : (grant.stopAge != null ? grant.stopAge : fireAge);
-            if (age >= start && age < stop) {
+            if (exAge >= start && exAge < stop) {
               const v = grantVestAtYear(grant, usdIls, k);
-              depositGrant(acc, v.gross * yf, v.ordinary * yf);
+              depositGrant(acc, v.gross / 12, v.ordinary / 12);
             }
           }
         });
       }
 
-      // 4) Take-home cash income (prorated in year 0).
-      const salary = (working && state.income.stopSalaryAtFire
-        ? netMonthly * 12 * Math.pow(1 + state.income.salaryGrowthPct / 100, k)
-        : (!state.income.stopSalaryAtFire
-            ? netMonthly * 12 * Math.pow(1 + state.income.salaryGrowthPct / 100, k)
-            : 0)) * yf;
+      // 4) One month of take-home pay. `netMonthly` is already a monthly figure.
+      const salaryM = (state.income.stopSalaryAtFire && !working)
+        ? 0
+        : netMonthly * Math.pow(1 + state.income.salaryGrowthPct / 100, k);
 
-      let extra = 0;
+      // 4a) Extra income streams inside their own age window. `endAge` keeps its
+      //     inclusive-year meaning (< endAge+1) so stream durations are unchanged
+      //     — only the month they start and stop moves onto the birthday.
+      let extraM = 0;
       (state.income.extra || []).forEach((s) => {
-        if (age >= s.startAge && age <= s.endAge) {
-          extra += s.monthlyAmount * 12 * Math.pow(1 + (s.growthPct || 0) / 100, age - s.startAge);
+        if (exAge >= s.startAge && exAge < (s.endAge || 0) + 1) {
+          extraM += s.monthlyAmount * Math.pow(1 + (s.growthPct || 0) / 100, Math.max(0, exAge - s.startAge));
         }
       });
-      extra *= yf;
 
-      // 4b) Real estate: appreciation, rent income, mortgage amortization.
-      let reValue = 0, reDebt = 0, rentIncome = 0, mortgagePay = 0;
+      // 4b) Real estate: one month of appreciation, rent, and amortization.
+      //     stepLoan is already a monthly engine, so it advances exactly one month.
+      let rentM = 0, mortgageM = 0;
       props.forEach((p) => {
-        p.val *= Math.pow(1 + p.growth / 100, yf);
-        reValue += p.val;
-        rentIncome += p.rent * 12 * Math.pow(1 + p.rentGrowth / 100, k) * yf;
+        p.val *= 1 + monthlyRate(p.growth);
+        rentM += p.rent * Math.pow(1 + p.rentGrowth / 100, k);
       });
-      if (loans.length) {
-        const inflM = Math.pow(1 + infl, 1 / 12) - 1;
-        loans.forEach((L) => {
-          mortgagePay += stepLoan(L, Math.round(12 * yf), inflM);
-          reDebt += L.bal;
-        });
-      }
-      const reEquity = reValue - reDebt;
+      loans.forEach((L) => { mortgageM += stepLoan(L, 1, inflM); });
 
-      // 4c) Bituach Leumi old-age pension (today's ₪, CPI-grown, untaxed —
-      //     usually below the tax threshold on its own).
+      // 4c) Bituach Leumi old-age pension (today's ₪, CPI-grown, untaxed).
       const oa = state.assumptions.oldAge || {};
-      const oldAge = oa.enabled && age >= (oa.fromAge || 70)
-        ? (oa.monthly || 0) * 12 * Math.pow(1 + infl, k) * yf : 0;
+      const oldAgeM = oa.enabled && exAge >= (oa.fromAge || 70)
+        ? (oa.monthly || 0) * Math.pow(1 + infl, k) : 0;
 
-      // 5) Spending (prorated in year 0).
-      const spend = monthlySpend(state, age) * 12 * yf;
+      // 5) One month of spending, resolved at the exact age.
+      const spendM = monthlySpend(state, exAge);
 
-      // 5b) Pension at access age — two modes:
-      //
-      //  ANNUITY (קצבה): At the access age the entire pot is exchanged for a
-      //  lifelong monthly annuity. The pot goes to ₪0 immediately (it now
-      //  belongs to the insurance company). The annuity pays monthly =
-      //  pot ÷ coefficient, CPI-linked, partially tax-exempt per Israeli law.
-      //  The pension balance no longer grows or counts as a personal asset.
-      //
-      //  LUMP SUM (היוון/משיכה): At the access age the pot is withdrawn in
-      //  full. Tax is applied (entitling-pension exemption + progressive income
-      //  tax on the taxable portion). The net proceeds are deposited into the
-      //  default liquid account. Pension balance goes to ₪0; no further
-      //  contributions or growth. The money is now in regular liquid savings.
-      const inflFactor = Math.pow(1 + infl, k);
-      let pensionGross = 0, pensionTax = 0, pensionNet = 0, pensionTaxable = 0;
-      let pensionLumpGross = 0, pensionLumpTax = 0, pensionLumpNet = 0;
-
+      // 5b) Pension. The annuity conversion and the lump-sum היוון are one-off
+      //     events that now fire in the month the access age is actually
+      //     reached. The annuity pays monthly; its tax accrues year-to-date and
+      //     is charged as the increment each month, which keeps the annual
+      //     exemption exact even when the annuity starts mid-year.
+      let pensionGrossM = 0, pensionLumpGrossM = 0, pensionLumpTaxM = 0, pensionLumpNetM = 0;
       accs.forEach((a) => {
         if (a.kind !== "pension") return;
         const access = a.accessAge || state.profile.pensionAccessAge;
-        if (age < access) return;
+        if (exAge < access) return;
 
         if (pcfg.mode === "annuity") {
-          // --- Annuity mode ---
           if (a.annuityGrossAnnual == null) {
-            // First year at access age: convert pot → annuity.
             a.annuityGrossAnnual = (a.bal / pcfg.coefficient) * 12;
             pensionConv.potAtAccess += a.bal;
             pensionConv.annuitizedPot += a.bal;
             pensionConv.grossAnnual += a.annuityGrossAnnual;
             pensionConv.factor = inflFactor;
             pensionConv.age = age;
-            pensionConv.year = rowYear;
-            // The pot is gone — it belongs to the insurer now.
-            a.bal = 0;
-            a.basis = 0;
-            a.contrib = 0;
-          } else if (pcfg.cpiLinked) {
-            a.annuityGrossAnnual *= 1 + infl;
+            pensionConv.year = year;
+            a.bal = 0; a.basis = 0; a.contrib = 0;
           }
-          // Annuity pays as income (not drawn from bal since bal = 0). Gross
-          // is accumulated here; tax is computed ONCE on the combined annuity
-          // after this loop, so multiple pension pots share one exemption.
-          pensionGross += a.annuityGrossAnnual * yf;
-
+          pensionGrossM += a.annuityGrossAnnual / 12;
         } else {
-          // --- Lump-sum mode (respecting the minimum-annuity rule) ---
           if (!a._lumpProcessed) {
             a._lumpProcessed = true;
-            // 1) The law requires securing the statutory minimum annuity
-            //    (קצבה מזערית, CPI-indexed) before any lump-sum: annuitize
-            //    just enough pot for it (shared across pension accounts).
             const minMonthly = pcfg.minAnnuity * inflFactor;
             const requiredPot = Math.max(0, minMonthly * pcfg.coefficient - lumpSecuredPot);
             const toAnnuitize = Math.min(a.bal, requiredPot);
@@ -689,181 +787,136 @@
               a.annuityGrossAnnual = (toAnnuitize / pcfg.coefficient) * 12;
               lumpSecuredPot += toAnnuitize;
             }
-            // 2) The remainder is withdrawn (היוון): tax-free up to the
-            //    exempt-capital ceiling (exemption% × entitling ceiling × 180
-            //    months, only from exemptionFromAge); the rest at marginal
-            //    income-tax rates. Using the exempt capital here consumes the
-            //    ongoing annuity exemption.
             const gross = a.bal - toAnnuitize;
             if (gross > 0) {
-              const eligible = age >= pcfg.exemptionFromAge;
-              const capLeft = eligible ? Math.max(0, (exemptionPctAt(rowYear) / 100) * (pcfg.ceiling * inflFactor) * 180 - lumpExemptUsed) : 0;
+              const eligible = exAge >= pcfg.exemptionFromAge;
+              const capLeft = eligible ? Math.max(0, (exemptionPctAt(year) / 100) * (pcfg.ceiling * inflFactor) * 180 - lumpExemptUsed) : 0;
               const exemptPart = Math.min(gross, capLeft);
               lumpExemptUsed += exemptPart;
               if (exemptPart > 0) lumpUsedExemption = true;
               const tax = incomeTaxAnnual(gross - exemptPart, inflFactor);
-              const net = gross - tax;
-              pensionLumpGross += gross;
-              pensionLumpTax += tax;
-              pensionLumpNet += net;
-              // Deposit net into default account (raises balance + basis).
-              deposit(defaultAcc, net);
+              pensionLumpGrossM += gross;
+              pensionLumpTaxM += tax;
+              pensionLumpNetM += gross - tax;
+              deposit(defaultAcc, gross - tax);
             }
-            // Record for pensionConv output; zero the pot either way.
             pensionConv.potAtAccess += a.bal;
             pensionConv.annuitizedPot += toAnnuitize;
             pensionConv.grossAnnual += a.annuityGrossAnnual || 0;
             pensionConv.factor = inflFactor;
             pensionConv.age = age;
-            pensionConv.year = rowYear;
-            a.bal = 0;
-            a.basis = 0;
-            a.contrib = 0;
-          } else if (a.annuityGrossAnnual != null && pcfg.cpiLinked) {
-            a.annuityGrossAnnual *= 1 + infl;
+            pensionConv.year = year;
+            a.bal = 0; a.basis = 0; a.contrib = 0;
           }
-          // The forced minimum annuity pays as income (taxed once, combined,
-          // after this loop).
-          if (a.annuityGrossAnnual != null) pensionGross += a.annuityGrossAnnual * yf;
+          if (a.annuityGrossAnnual != null) pensionGrossM += a.annuityGrossAnnual / 12;
         }
       });
 
-      // Tax the year's combined pension annuity ONCE — a single entitling-
-      // pension exemption regardless of how many pension pots pay it. In lump
-      // mode the exemption is gone if the lump consumed the exempt capital.
-      if (pensionGross > 0) {
+      // Tax the annuity on a year-to-date basis: one entitling-pension
+      // exemption per calendar year, shared across pots, charged as the
+      // month-on-month increment.
+      let pensionTaxM = 0;
+      if (pensionGrossM > 0) {
         const useEx = pcfg.mode === "annuity" ? true : !lumpUsedExemption;
-        pensionTaxable = pensionTaxableAnnual(pensionGross, inflFactor, age, rowYear, useEx);
-        pensionTax = pensionTaxAnnual(pensionGross, inflFactor, age, rowYear, useEx);
-        pensionNet = pensionGross - pensionTax;
+        Y.pensionGrossYTD += pensionGrossM;
+        const taxYTD = pensionTaxAnnual(Y.pensionGrossYTD, inflFactor, exAge, year, useEx);
+        pensionTaxM = Math.max(0, taxYTD - Y.pensionTaxYTD);
+        Y.pensionTaxYTD = taxYTD;
       }
+      const pensionNetM = pensionGrossM - pensionTaxM;
 
-      // 6) Cash flow. Income = take-home + extra + net pension annuity.
-      //    Surplus is reinvested; a shortfall is withdrawn NET from liquid
-      //    accounts (selling from taxable pots incurs capital-gains tax, so the
-      //    gross sale exceeds the net cash needed). We track the source of each
-      //    withdrawal.
-      //
-      //    `ordStackBase` is this year's other ordinary taxable income. Selling
-      //    grant shares realizes Section-102 ordinary income, which stacks on
-      //    top of it — so each sale is priced at the real bracket, and a second
-      //    sale in the same year is priced above the first.
-      let ordStackBase = (working ? taxableSalaryAnnual(state, payroll)
-            * Math.pow(1 + (state.income.salaryGrowthPct || 0) / 100, k) * yf : 0)
-        + pensionTaxable;
-      const incomeTotal = salary + extra + pensionNet + oldAge + rentIncome;
-      let net = incomeTotal - spend - mortgagePay;
-      const sources = {}; // accountId -> net ₪ drawn for living this year
-      let withdrawalNet = 0, withdrawalGross = 0, withdrawalTax = 0;
-      if (coasting) {
-        // Coast what-if: income is assumed to exactly cover outgoings —
-        // nothing is saved and nothing is withdrawn.
-        net = 0;
-      } else if (net >= 0) {
-        distributeSurplus(net);
-      } else {
-        let needNet = -net;
-        const drawOrder = (state.assumptions.withdrawalOrder && state.assumptions.withdrawalOrder.length)
-          ? state.assumptions.withdrawalOrder
-          : WITHDRAW_PRIORITY;
-        for (const kind of drawOrder) {
-          if (needNet <= 1e-6) break;
-          for (const a of accs) {
-            if (needNet <= 1e-6) break;
-            if (a.kind !== kind) continue;
-            if (a.bal <= 0) continue;
-            // Money earmarked as NOT part of FIRE is never spent down in retirement.
-            if (!a.includeInFire) continue;
-            if (a.kind === "pension") {
-              if (pcfg.mode === "annuity") continue; // annuitized: not drawable
-              const access = a.accessAge || state.profile.pensionAccessAge;
-              if (age < access) continue; // lump mode: locked until access
-            } else {
-              if (!a.liquid) continue;
-              if (a.accessAge && age < a.accessAge) continue;
-            }
-            if (a.isGrant) {
-              // Section-102 capital-gains track: the tax falls due HERE, on the
-              // sale — not back when the shares vested. The ordinary slice is
-              // priced at this year's marginal rate; the appreciation above it
-              // at the grant's capital-gains rate.
-              const fullTax = grantSaleTax(a, a.bal, ordStackBase, inflFactor);
-              const deliverable = Math.max(0, a.bal - fullTax);
-              if (deliverable <= 1e-6) continue;
-              const takeNet = Math.min(needNet, deliverable);
-              const grossSale = takeNet >= deliverable - 1e-6
-                ? a.bal
-                : grantGrossForNet(a, takeNet, ordStackBase, inflFactor);
-              const ordSold = a.ord * (grossSale / a.bal);
-              const tax = grantSaleTax(a, grossSale, ordStackBase, inflFactor);
-              const netGot = Math.max(0, grossSale - tax);
-              a.bal -= grossSale;
-              a.ord = Math.max(0, a.ord - ordSold);
-              a.basis = a.ord;
-              ordStackBase += ordSold; // later sales this year stack on top
-              needNet -= netGot;
-              withdrawalNet += netGot;
-              withdrawalGross += grossSale;
-              withdrawalTax += tax;
-              sources[a.id] = (sources[a.id] || 0) + netGot;
-              continue;
-            }
-            const gainFrac = a.bal > 0 ? Math.max(0, (a.bal - a.basis) / a.bal) : 0;
-            const effRate = gainFrac * (a.cg / 100); // effective tax per ₪ sold
-            const deliverable = a.bal * (1 - effRate); // net if fully liquidated
-            const takeNet = Math.min(needNet, deliverable);
-            const grossSale = effRate < 1 ? takeNet / (1 - effRate) : takeNet;
-            a.bal -= grossSale;
-            a.basis = Math.max(0, a.basis - grossSale * (1 - gainFrac));
-            needNet -= takeNet;
-            withdrawalNet += takeNet;
-            withdrawalGross += grossSale;
-            withdrawalTax += grossSale - takeNet;
-            sources[a.id] = (sources[a.id] || 0) + takeNet;
+      // Ordinary taxable income realized this month, for Section-102 stacking.
+      Y.ordStack += (working ? taxableSalaryAnnual(state, payroll) / 12 * Math.pow(1 + (state.income.salaryGrowthPct || 0) / 100, k) : 0)
+        + pensionTaxableAnnual(pensionGrossM * 12, inflFactor, exAge, year, pcfg.mode === "annuity" ? true : !lumpUsedExemption) / 12;
+
+      // 6) Cash flow for the month.
+      const incomeM = salaryM + extraM + pensionNetM + oldAgeM + rentM;
+      let netM = incomeM - spendM - mortgageM;
+      if (coasting) netM = 0; // coast: income is assumed to exactly cover outgoings
+      let wdNetBefore = Y.withdrawalNet;
+      if (!coasting) {
+        buffer += netM;
+        if (buffer < -1e-6) {
+          const unmet = withdrawNet(-buffer, exAge, Y, inflFactor);
+          buffer = -unmet;
+          if (unmet > 0.5) {
+            if (depletionAge == null) { depletionAge = age; depletionExactAge = exAge; }
+            buffer = 0; // the shortfall is unfunded; don't carry it forward
           }
         }
-        if (needNet > 0.5 && depletionAge == null) depletionAge = age;
       }
 
-      // 7) Record.
-      const perAccount = {};
-      let total = 0, liquid = 0, nonPension = 0, pension = 0, fireEligible = 0;
-      // Grant accounts hold GROSS shares, so report them net of the Section-102
-      // tax that would fall due on sale — otherwise net worth and the FIRE
-      // target are flattered by money that is owed to the tax authority.
-      let rsuDeferredTax = 0, reportStack = ordStackBase;
-      accs.forEach((a) => {
-        let v = Math.max(0, a.bal);
-        if (a.isGrant && v > 0) {
-          const t = grantSaleTax(a, v, reportStack, inflFactor);
-          reportStack += a.ord;
-          rsuDeferredTax += t;
-          v = Math.max(0, v - t);
-        }
-        perAccount[a.id] = v;
-        total += v;
-        if (a.kind === "pension") pension += v; else nonPension += v;
-        const drawable = a.kind === "pension"
-          ? (pcfg.mode === "lump" && age >= (a.accessAge || state.profile.pensionAccessAge))
-          : (a.liquid && (!a.accessAge || age >= a.accessAge));
-        if (drawable) liquid += v;
-        if (a.includeInFire) fireEligible += v;
-      });
+      // Accumulate the calendar year's flows.
+      Y.salary += salaryM; Y.extra += extraM; Y.spend += spendM;
+      Y.pensionGross += pensionGrossM; Y.pensionTax += pensionTaxM; Y.pensionNet += pensionNetM;
+      Y.oldAge += oldAgeM; Y.rentIncome += rentM; Y.mortgagePay += mortgageM;
+      Y.pensionLumpGross += pensionLumpGrossM; Y.pensionLumpTax += pensionLumpTaxM; Y.pensionLumpNet += pensionLumpNetM;
+      Y.incomeTotal += incomeM; Y.net += netM;
 
-      // Property equity counts toward net worth (not liquid / non-pension —
-      // you can't spend the house without selling it).
-      total += reEquity;
+      if (collectMonthly) {
+        monthly.push({
+          mi, k, year, month, age, exactAge: exAge, working, coasting,
+          salary: salaryM, extra: extraM, spend: spendM,
+          incomeTotal: incomeM, net: netM,
+          pensionGross: pensionGrossM, pensionTax: pensionTaxM, pensionNet: pensionNetM,
+          oldAge: oldAgeM, rentIncome: rentM, mortgagePay: mortgageM,
+          pensionLumpGross: pensionLumpGrossM, pensionLumpTax: pensionLumpTaxM, pensionLumpNet: pensionLumpNetM,
+          withdrawalNet: Y.withdrawalNet - wdNetBefore,
+          buffer,
+        });
+      }
 
-      const realFactor = Math.pow(1 + infl, k);
-      rows.push({
-        age, k, year: asOf.getFullYear() + k, working, salary, extra, spend, net,
-        incomeTotal, pensionGross, pensionTax, pensionNet, oldAge,
-        pensionLumpGross, pensionLumpTax, pensionLumpNet,
-        reValue, reDebt, reEquity, rentIncome, mortgagePay,
-        withdrawalNet, withdrawalGross, withdrawalTax, sources, rsuDeferredTax,
-        perAccount, total, liquid, nonPension, pension, fireEligible,
-        realFactor,
-      });
+      // 7) Year end: invest the accumulated surplus, then snapshot and emit the
+      //    annual row. Investing at year end (rather than each month) keeps the
+      //    established convention that a year's surplus starts compounding the
+      //    following year.
+      if (isYearEnd) {
+        if (!coasting && buffer > 1e-6) { distributeSurplus(buffer); buffer = 0; }
+
+        const perAccount = {};
+        let total = 0, liquid = 0, nonPension = 0, pension = 0, fireEligible = 0;
+        let rsuDeferredTax = 0, reportStack = Y.ordStack;
+        accs.forEach((a) => {
+          let v = Math.max(0, a.bal);
+          if (a.isGrant && v > 0) {
+            // Report grant accounts net of the Section-102 tax that would fall
+            // due on sale, so net worth is not flattered by money that is owed.
+            const t = grantSaleTax(a, v, reportStack, inflFactor);
+            reportStack += a.ord;
+            rsuDeferredTax += t;
+            v = Math.max(0, v - t);
+          }
+          perAccount[a.id] = v;
+          total += v;
+          if (a.kind === "pension") pension += v; else nonPension += v;
+          const drawable = a.kind === "pension"
+            ? (pcfg.mode === "lump" && exAge >= (a.accessAge || state.profile.pensionAccessAge))
+            : (a.liquid && (!a.accessAge || exAge >= a.accessAge));
+          if (drawable) liquid += v;
+          if (a.includeInFire) fireEligible += v;
+        });
+
+        let reValue = 0, reDebt = 0;
+        props.forEach((p) => { reValue += p.val; });
+        loans.forEach((L) => { reDebt += L.bal; });
+        const reEquity = reValue - reDebt;
+        total += reEquity; // equity counts in net worth but is never liquid
+
+        rows.push({
+          age: Y.age, k: Y.k, year: Y.year,
+          working: Y.workingMonths > 0, workingMonths: Y.workingMonths, months: Y.months,
+          salary: Y.salary, extra: Y.extra, spend: Y.spend, net: Y.net,
+          incomeTotal: Y.incomeTotal,
+          pensionGross: Y.pensionGross, pensionTax: Y.pensionTax, pensionNet: Y.pensionNet,
+          oldAge: Y.oldAge,
+          pensionLumpGross: Y.pensionLumpGross, pensionLumpTax: Y.pensionLumpTax, pensionLumpNet: Y.pensionLumpNet,
+          reValue, reDebt, reEquity, rentIncome: Y.rentIncome, mortgagePay: Y.mortgagePay,
+          withdrawalNet: Y.withdrawalNet, withdrawalGross: Y.withdrawalGross,
+          withdrawalTax: Y.withdrawalTax, sources: Y.sources, rsuDeferredTax,
+          perAccount, total, liquid, nonPension, pension, fireEligible,
+          realFactor: Math.pow(1 + infl, Y.k),
+        });
+      }
     }
 
     // FIRE targets from headline monthly spend.
@@ -975,7 +1028,14 @@
     return {
       A0, endAge, fireAge,
       rows, accountsMeta, groupsMeta, groupOf,
+      // Monthly series behind the annual rows. Same flow fields plus `exactAge`,
+      // `month` (0-11) and the running cash `buffer`. Suppressed when
+      // opts.collectMonthly === false (Monte Carlo and the age searches, which
+      // only read the annual aggregates and run the projection thousands of times).
+      monthly,
+      monthsPerYear: 12,
       depletionAge,
+      depletionExactAge,
       survives: depletionAge == null,
       targets,
       pension: pensionInfo,
@@ -1112,7 +1172,7 @@
     for (let fa = start; fa <= end; fa++) {
       const t = FIRE.state.clone(state);
       t.profile.fireAge = fa;
-      const p = project(t);
+      const p = project(t, { collectMonthly: false });
       if (p.survives) return { found: true, age: fa, yearsAway: fa - start };
     }
     return { found: false, age: null, yearsAway: null };
@@ -1151,7 +1211,7 @@
         if (arr[k] == null) arr[k] = randn() * (vol[acc.kind] != null ? vol[acc.kind] : 0);
         return (acc.ret || 0) + arr[k];
       };
-      const p = project(state, { returnOverride: override });
+      const p = project(state, { returnOverride: override, collectMonthly: false });
       if (collectBands) {
         if (!perYear) {
           years = p.rows.map((r) => r.year);
@@ -1189,14 +1249,42 @@
     };
   }
   // Earliest retirement age whose Monte Carlo success rate meets the target
-  // confidence (uses fewer sims per candidate — it's a search, not a report).
+  // confidence. Success is monotonic in the retirement age — retiring later
+  // always means more accumulation and less drawdown — so this bisects the age
+  // range instead of scanning it, and starts from the DETERMINISTIC earliest
+  // age (below that the median path already fails, so no high confidence bar
+  // can be met). A coarse pass finds the boundary cheaply, then the answer is
+  // confirmed at the full sim count. Without this the monthly engine would run
+  // ~40 candidates x `sims` full projections and freeze the tab.
   function safeFireAge(state, confidencePct, sims) {
     const start = Math.round(state.profile.currentAge);
-    for (let fa = start; fa <= state.profile.endAge; fa++) {
+    const full = sims || 200;
+    const coarse = Math.max(40, Math.min(full, 60));
+    const det = earliestFireAge(state);
+    let lo = det.found ? Math.max(start, det.age) : start;
+    const hi0 = state.profile.endAge;
+
+    const rateAt = (fa, n) => {
       const t = FIRE.state.clone(state);
       t.profile.fireAge = fa;
-      const r = monteCarlo(t, { sims: sims || 200, collectBands: false });
-      if (r.successRate >= confidencePct) return { found: true, age: fa, yearsAway: fa - start, successRate: r.successRate };
+      return monteCarlo(t, { sims: n, collectBands: false }).successRate;
+    };
+
+    // Is the bar reachable at all?
+    if (rateAt(hi0, coarse) < confidencePct) return { found: false, age: null, yearsAway: null, successRate: null };
+
+    // Bisect for the smallest age that clears the bar.
+    let hi = hi0;
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      if (rateAt(mid, coarse) >= confidencePct) hi = mid; else lo = mid + 1;
+    }
+
+    // Confirm at the full sim count; the coarse pass can land one age early on
+    // a noisy boundary, so step up until it holds (bounded by endAge).
+    for (let fa = lo; fa <= hi0; fa++) {
+      const r = rateAt(fa, full);
+      if (r >= confidencePct) return { found: true, age: fa, yearsAway: fa - start, successRate: r };
     }
     return { found: false, age: null, yearsAway: null, successRate: null };
   }
@@ -1212,7 +1300,7 @@
     for (let c = start; c <= fa; c++) {
       const t = FIRE.state.clone(state);
       t._coastFrom = c;
-      if (project(t).survives) return { found: true, age: c, yearsAway: c - start };
+      if (project(t, { collectMonthly: false }).survives) return { found: true, age: c, yearsAway: c - start };
     }
     return { found: false, age: null, yearsAway: null };
   }
@@ -1230,7 +1318,7 @@
         id: "__barista__", name: "Part-time (barista)", monthlyAmount: monthly || 0,
         startAge: f, endAge: untilAge || f, growthPct: t.assumptions.inflation || 0,
       }]);
-      if (project(t).survives) return { found: true, age: f, yearsAway: f - start };
+      if (project(t, { collectMonthly: false }).survives) return { found: true, age: f, yearsAway: f - start };
     }
     return { found: false, age: null, yearsAway: null };
   }

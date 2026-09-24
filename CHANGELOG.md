@@ -3,6 +3,45 @@
 All notable changes are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## 1.31.0
+
+- **The engine is now a real monthly model.** `project()` integrates in calendar months and aggregates
+  each year into one annual row. Both series are returned: `rows` (one per calendar year — unchanged
+  shape, so every chart, table and CSV keeps working) and the new `monthly` (one per month, with
+  `exactAge`, `month`, and the running cash `buffer`). `monthly` sums exactly to `rows`.
+  - Rates convert to their monthly equivalent `(1+r)^(1/12)−1`, so twelve months compound to exactly
+    the stated annual rate. The old `firstYearFrac` fudge is gone — the first year is partial because
+    the loop genuinely starts in the as-of month.
+  - **Contributions are deposited monthly**, so money saved in January compounds for the rest of that
+    year. Previously a whole year of contributions was added *after* that year's growth and earned
+    nothing until the next year. This alone lifts long-run balances by roughly 4–5%.
+  - **Every age boundary now lands on your real birthday** instead of snapping to 1 January: retirement,
+    pension access, per-account `accessAge`, spending-category and extra-income windows, grant vesting
+    windows, and the old-age pension start.
+  - **The retirement year is split.** You earn salary up to your birthday and draw down after it. On the
+    sample plan that recovers **₪173,855** of salary in 2042 (7 of 12 months worked) that the yearly
+    model discarded entirely, and correspondingly reduces that year's withdrawals. Annual rows now carry
+    `workingMonths` (0–12) next to `working`.
+  - **Withdrawals happen in the month the money is actually needed**, not as one year-end lump.
+  - Window *durations* are deliberately unchanged (`endAge` keeps its inclusive-whole-year meaning), so
+    only the month a window opens and closes moves — its length does not.
+- **No spurious selling.** Monthly net flows land in a cash float: a negative float is funded
+  immediately, a positive float is invested at year end. Verified across 28 plan shapes that no year
+  which was net-positive overall now sells anything.
+- **Annual tax still settles annually**, because Israeli tax is defined on annual totals. The pension
+  annuity's entitling-pension exemption accrues year-to-date and charges the monthly increment (exact
+  even when the annuity starts mid-year), and Section-102 ordinary income stacks on a year-to-date base
+  so a sale in March is priced below one in November.
+- **`monthly` CSV export** — a second button on the Projections tab dumps one row per month straight
+  from the engine, so you can see exactly which month a boundary or vest lands in.
+- **The safe-retirement-age search now bisects** instead of scanning every age, bounded below by the
+  deterministic earliest age. Monte Carlo success is monotonic in the retirement age, so this is
+  equivalent; without it the monthly engine would have taken ~24s and frozen the tab. It now runs
+  faster than the previous yearly implementation did.
+- Real estate is unaffected to the shekel: property growth, rent, mortgage payments, debt and equity
+  come out **identical** to the yearly model, because monthly compounding of a property equals its
+  annual rate and the amortizer was already monthly.
+
 ## 1.30.1
 
 - **Fixed a one-year off-by-one in the "Income & withdrawals by phase" age ranges.** Both ends of each

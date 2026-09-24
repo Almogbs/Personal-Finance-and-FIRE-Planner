@@ -11,14 +11,55 @@ deterministic model. It is **not** tax advice and does not attempt to reproduce 
 
 ## Time axis
 
-- Projection runs yearly from `round(profile.currentAge)` to `profile.endAge` (default 80).
-- "Working" years are ages `< profile.fireAge`; "retired" years are `>= fireAge`.
-- **Rows are calendar-year aligned**: the first row is the current calendar year prorated to Dec 31,
-  and each subsequent row is one calendar year. Every row carries its `year`, and the UI pairs that
-  absolute year with your **exact age (years + months)** derived from the birth date — e.g.
-  "2033 · 32y 4m" — instead of a rounded "2033 · age 32" that can be off by most of a year.
-  Age-milestone events (retirement, pension access, depletion) are labeled with the year they take
-  effect and your exact age at the start of that year.
+The engine integrates in **calendar months** and then aggregates each calendar year into one
+annual row. Both are returned: `rows` (one per calendar year — the series every chart, table and
+CSV uses) and `monthly` (one per month, the raw series behind them).
+
+- The month loop runs from the **as-of month** through December of the final year, so the first
+  calendar year is naturally partial (start in September → a 4-month first row). There is no
+  year-fraction fudge factor.
+- Every **rate** is converted to its monthly equivalent `(1+r)^(1/12) − 1`, so twelve months compound
+  to exactly the stated annual rate. Annual balance fees are likewise taken as `(1−fee)^(1/12)` a month.
+- Every **boundary** is tested against your **exact fractional age** each month, so it lands on your
+  real birthday instead of snapping to 1 January. This governs retirement (`fireAge`), pension access,
+  per-account `accessAge`, spending-category windows, extra-income windows, grant vesting windows and
+  the old-age pension start. The retirement year is therefore **split**: you earn salary up to your
+  birthday and draw down after it, and the annual row reports `workingMonths` (0–12) alongside `working`.
+- **Contributions are deposited monthly**, so money saved in January compounds for the rest of that
+  year. In the previous yearly model a whole year of contributions was added after that year's growth
+  and earned nothing until the following year.
+- Annual rows are built by **summing flows** (salary, spend, withdrawals, rent, mortgage, pension) over
+  the year's months and **snapshotting balances** at the final month. `monthly` sums exactly to `rows`.
+- `rows` keeps its `age` as the whole projection age and `k` as the year index, unchanged, so real-mode
+  deflation (`value / (1+inflation)^k`) and every existing consumer behave as before. The UI pairs the
+  row's absolute `year` with your exact age in years + months from the birth date — "2033 · 32y 4m".
+  Age-milestone labels (retirement, pension access, depletion) show the year they take effect and your
+  exact age at the start of it.
+
+### What still settles annually
+
+Israeli tax is defined on annual totals, so some things cannot be computed a month at a time:
+
+- **Income-tax brackets, credit points and the NI/health ceilings.** Net salary is already a monthly
+  payroll calculation, and it is applied monthly.
+- **The pension annuity's entitling-pension exemption** (Amendment 190) is one allowance per calendar
+  year. The engine accrues annuity gross **year-to-date**, recomputes the year's tax each month and
+  charges the increment, which keeps the allowance exact even when the annuity starts mid-year.
+- **Section-102 ordinary income** from selling grant shares stacks on a year-to-date base (taxable
+  salary + taxable pension + ordinary already realized that year), so a sale in March is priced below
+  one in November — the brackets settle per calendar year even though the cash moves monthly.
+- **The lump-sum היוון exempt capital** (`pct × ceiling × 180`) is a one-off statutory calculation.
+
+### Cash flow within a year
+
+Each month's income minus outgoings lands in a **cash float**:
+
+- a **negative** float is funded immediately by selling, because that is a real cash need in that month;
+- a **positive** float accumulates and is invested at **year end** via the allocation rules, which keeps
+  the established convention that a year's surplus starts compounding the following year.
+
+This is why monthly stepping does **not** cause spurious selling: a surplus month builds the float that
+a later deficit month spends, so no year that was net-positive overall sells anything.
 
 ## Accounts
 
@@ -331,6 +372,14 @@ projected spending (categories/steps), so it reflects the plan you've modeled ra
 
 - Single fixed return per account (no volatility / sequence-of-returns risk).
 - Constant FX.
+- Monthly stepping resolves *timing* within a year, not sub-monthly behaviour: a month is the smallest
+  unit, and a flat `sharesPerYear` grant vests a twelfth each month rather than on a real quarterly
+  schedule (use a dated vesting schedule for exact vest dates).
+- Monte Carlo draws **one shock per account type per year** and applies it to all twelve months of that
+  year, so it models year-to-year sequence risk, not month-to-month noise.
+- Spending-category and extra-income `endAge` keeps its inclusive-whole-year meaning (`< endAge + 1`),
+  so window *durations* are unchanged from the yearly model — only the month they start and stop moves
+  onto the birthday.
 - Capital-gains tax on taxable-account drawdowns is modeled on the **gain portion only** (basis from
   `costBasis`/`gainPct`); it does not model per-lot holding periods, loss harvesting, or the exact
   Israeli reporting rules.

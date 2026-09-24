@@ -1248,6 +1248,7 @@
         '<div class="toolbar">' +
           toggle("Real (today's ₪)", "assumptions.realMode") +
           '<button class="btn small" data-action="export-csv">⬇ Export CSV</button>' +
+          '<button class="btn small" data-action="export-csv-monthly" title="One row per calendar month straight from the monthly engine, before it is aggregated into years">⬇ Export monthly CSV</button>' +
         "</div>" +
         '<div class="panel"><h3>All entities over time (stacked)</h3>' +
           '<div class="toolbar" style="margin-bottom:6px"><label class="switch"><input type="checkbox" data-stackpension="1"' + (this.showPension ? " checked" : "") + "> Include pension</label></div>" +
@@ -1360,6 +1361,28 @@
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url; a.download = "fire-projection.csv"; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    },
+    // The monthly series the engine actually integrates, before it is
+    // aggregated into the annual rows shown on this page. Useful for checking
+    // exactly which month a boundary (retirement, pension access, a vest) lands in.
+    exportMonthlyCSV() {
+      const st = S();
+      const p = FIRE.engine.project(st);
+      const cols = ["year", "month", "exact_age", "phase", "salary", "extra", "pension_net", "old_age",
+        "rent", "mortgage_pay", "spend", "net", "withdrawn_net", "cash_buffer"];
+      const lines = [cols.join(",")];
+      (p.monthly || []).forEach((m) => {
+        lines.push([m.year, m.month + 1, m.exactAge.toFixed(3),
+          m.coasting ? "coast" : (m.working ? "work" : "retire"),
+          Math.round(m.salary), Math.round(m.extra), Math.round(m.pensionNet), Math.round(m.oldAge),
+          Math.round(m.rentIncome), Math.round(m.mortgagePay), Math.round(m.spend), Math.round(m.net),
+          Math.round(m.withdrawalNet), Math.round(m.buffer)].join(","));
+      });
+      const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = "fire-projection-monthly.csv"; document.body.appendChild(a); a.click(); document.body.removeChild(a);
       URL.revokeObjectURL(url);
     },
   };

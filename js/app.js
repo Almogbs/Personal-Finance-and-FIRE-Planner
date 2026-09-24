@@ -525,6 +525,7 @@ function mountPage() {
         if (confirm("Reset everything to the default plan? Your current state will be overwritten.")) { state.reset(); remountPage(); }
         break;
       case "export-csv": FIRE.ui.pages.projections.exportCSV(); break;
+      case "export-csv-monthly": FIRE.ui.pages.projections.exportMonthlyCSV(); break;
       case "add-month": {
         const inp = document.getElementById("trk-month");
         let ym = inp && inp.value ? inp.value : new Date().toISOString().slice(0, 7);
