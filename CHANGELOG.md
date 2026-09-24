@@ -3,6 +3,28 @@
 All notable changes are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## 1.30.0
+
+- **RSU Section-102 tax is now charged on sale, not on vest.** Under the capital-gains track the taxable
+  event is the release from the trustee, so grant accounts now hold **gross** share value plus a deferred
+  tax liability instead of being seeded net. The amount that was previously handed to the tax authority
+  years early now keeps compounding until the shares are actually sold — worth roughly **+12%** on the
+  grant pot at retirement for the sample plan, and **+21%** for a grant whose basis equals its current
+  price.
+- **The grant-basis slice is taxed at your real marginal rate, not a flat 47%.** It is stacked on the
+  sale year's other ordinary taxable income (salary + taxable pension) and priced with the same
+  progressive `TAX_BRACKETS` already used for salary and pension. A retiree with no other income pays
+  **10%** on that slice; the old flat 47% was only correct for someone already in the top bracket.
+  Selling two grants in one year pushes the second slice into higher brackets, as a real tax return would.
+- **Reported balances stay net.** Net worth, liquid, and the FIRE-eligible pot subtract the tax that
+  would fall due if the grant were sold that year, so nothing is flattered by money that is owed.
+  Each projection row exposes the figure as `rsuDeferredTax`.
+- The gross sale needed to deliver a given net withdrawal is solved by **bisection**, because
+  progressive brackets make the effective rate depend on how much you sell.
+- The per-grant **"Ord. tax %"** field is now only a fallback for the **what-if switch tool** (which has
+  no modeled sale year to stack onto) and is labelled as such. Plans with no equity grants are
+  bit-for-bit unchanged.
+
 ## 1.29.0
 
 - **"Include pension" toggle on the stacked charts** — both the Projections tab's "All entities over

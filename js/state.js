@@ -236,18 +236,32 @@
 
   /* ---- Equity grants as virtual accounts ---------------------------------
    * A grant's value depends on live share price and FX, so we compute it
-   * rather than storing a static balance. Section-102 capital-gains model:
-   * the grant-basis value is taxed at the ordinary rate and the appreciation
-   * above basis at the capital-gains rate.
+   * rather than storing a static balance.
+   *
+   * Section-102 capital-gains track (מסלול רווח הון): the taxable event is the
+   * SALE (release from the trustee), not the vest. The gross proceeds split in
+   * two, and the split point never grows:
+   *   ordinary  = shares × grantBasisUsd  → employment income, taxed at the
+   *               seller's MARGINAL rate in the year of sale
+   *   apprec    = gross − ordinary        → capital gain, taxed at capGainsRate
+   *
+   * `ordinaryTax(ordinary)` lets the caller price the ordinary slice with real
+   * progressive brackets (the projection and the dashboard do this, stacking it
+   * on the year's other taxable income). Omitted, it falls back to the grant's
+   * flat `ordinaryTaxRate` — an at-a-glance estimate, used by the what-if
+   * switch tool where there is no modeled sale year to stack onto.
    *-----------------------------------------------------------------------*/
-  function grantNet(grant, usdIls, shares, price) {
+  function grantNet(grant, usdIls, shares, price, ordinaryTax) {
     const fx = grant.currency === "ILS" ? 1 : usdIls;
     const p = price != null ? price : grant.sharePrice;
     const gross = (shares || 0) * p * fx;
     const ordinary = (shares || 0) * (grant.grantBasisUsd || 0) * fx;
     const apprec = Math.max(0, gross - ordinary);
-    const tax = ordinary * ((grant.ordinaryTaxRate || 0) / 100) + apprec * ((grant.capGainsRate || 0) / 100);
-    return { gross, tax, net: gross - tax, effectiveRate: gross > 0 ? tax / gross : 0 };
+    const ordTax = typeof ordinaryTax === "function"
+      ? ordinaryTax(ordinary)
+      : ordinary * ((grant.ordinaryTaxRate || 0) / 100);
+    const tax = ordTax + apprec * ((grant.capGainsRate || 0) / 100);
+    return { gross, ordinary, apprec, tax, net: gross - tax, effectiveRate: gross > 0 ? tax / gross : 0 };
   }
   // Currently-vested shares of a grant. A grant WITH a dated schedule derives
   // them from its events (anything dated on/before the as-of date has vested);
@@ -263,17 +277,19 @@
     });
     return sum;
   }
-  // Aggregate after-tax value of all currently-vested grant shares.
-  function grantsVested(state) {
+  // Aggregate after-tax value of all currently-vested grant shares. Pass
+  // `ordinaryTax` (see grantNet) to price the ordinary slice progressively;
+  // it is called once per grant, so a stacking resolver sees each slice in turn.
+  function grantsVested(state, ordinaryTax) {
     const usdIls = state.market.usdIls;
-    let gross = 0, tax = 0, net = 0;
+    let gross = 0, tax = 0, net = 0, ordinary = 0;
     const per = [];
     (state.income.grants || []).forEach((g) => {
-      const r = grantNet(g, usdIls, vestedSharesOf(state, g), g.sharePrice);
-      gross += r.gross; tax += r.tax; net += r.net;
-      per.push({ grant: g, gross: r.gross, tax: r.tax, net: r.net });
+      const r = grantNet(g, usdIls, vestedSharesOf(state, g), g.sharePrice, ordinaryTax);
+      gross += r.gross; tax += r.tax; net += r.net; ordinary += r.ordinary;
+      per.push({ grant: g, gross: r.gross, ordinary: r.ordinary, tax: r.tax, net: r.net });
     });
-    return { gross, tax, net, effectiveRate: gross > 0 ? tax / gross : 0, per };
+    return { gross, ordinary, tax, net, effectiveRate: gross > 0 ? tax / gross : 0, per };
   }
   function newGrant(state) {
     const st = state || get();

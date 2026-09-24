@@ -580,7 +580,7 @@
             '<button class="btn small" data-action="fetch-prices">↻ Fetch live prices</button>' +
             '<input data-path="live.corsProxy" data-type="text" placeholder="CORS proxy URL (optional)" style="width:210px">' +
             '<span id="grants-status" class="hint"></span></div>' +
-          '<div class="table-wrap"><table class="grid"><thead><tr><th>Name</th><th>Symbol</th><th>Cur</th><th>Price</th><th>Growth %</th><th>Vested sh.</th><th>Sh./yr</th><th>Basis</th><th>Ord. tax %</th><th>CG %</th><th>Vest from</th><th>Vest until</th><th>Schedule</th><th></th></tr></thead><tbody id="income-grants"></tbody></table></div>' +
+          '<div class="table-wrap"><table class="grid"><thead><tr><th>Name</th><th>Symbol</th><th>Cur</th><th>Price</th><th>Growth %</th><th>Vested sh.</th><th>Sh./yr</th><th>Basis</th><th title="Fallback flat rate, used only by the what-if switch tool. Projections and the summary below tax the grant-basis slice at your real marginal rate in the year of sale.">Ord. tax % *</th><th>CG %</th><th>Vest from</th><th>Vest until</th><th>Schedule</th><th></th></tr></thead><tbody id="income-grants"></tbody></table></div>' +
           '<div id="income-vests"></div>' +
           '<div id="income-rsu-out" class="callout"></div>' +
           '<p class="hint">Live prices fetch by <b>Symbol</b> (e.g. AMZN, GOOG) from <b>Yahoo Finance</b> — <b>no API key needed</b>. Browsers block Yahoo directly (CORS), so it goes through a public CORS proxy; the default usually works, or set another proxy URL prefix (e.g. <code>https://corsproxy.io/?</code>). Only runs on click; nothing but the ticker is sent.</p>' +
@@ -755,10 +755,10 @@
           po.innerHTML = "Net mode: take-home is used directly; pension/KH deposits come from each account's monthly contribution on the Accounts page.";
         }
       }
-      const gv = FIRE.state.grantsVested(st);
+      const gv = FIRE.state.grantsVested(st, FIRE.engine.grantOrdinaryTaxFor(st));
       const out = el.querySelector("#income-rsu-out");
       if (out) out.innerHTML = gv.per.length
-        ? "Total vested equity: <b>" + money(gv.gross) + "</b> gross · tax <b>" + money(gv.tax) + "</b> · net <b>" + money(gv.net) + "</b> (eff. " + (gv.effectiveRate * 100).toFixed(1) + "%). Each grant appears as a computed account on the Accounts page; vesting stops at each grant's 'vest until' age or your retirement age, whichever comes first."
+        ? "Total vested equity: <b>" + money(gv.gross) + "</b> gross · tax if sold now <b>" + money(gv.tax) + "</b> · net <b>" + money(gv.net) + "</b> (eff. " + (gv.effectiveRate * 100).toFixed(1) + "%). Section-102 tax is due only on sale: the grant-basis slice (<b>" + money(gv.ordinary) + "</b>) is taxed as ordinary income at your marginal rate in the year you sell, the appreciation above it at the capital-gains rate. Each grant appears as a computed account on the Accounts page; vesting stops at each grant's 'vest until' age or your retirement age, whichever comes first."
         : "No equity grants configured.";
 
       // Live allocation preview against this year's surplus.
@@ -1745,7 +1745,7 @@
           ctl("Share price", base + ".sharePrice", { min: 0, max: 5000, step: 0.5 }) +
           ctl("Vested shares", base + ".vestedShares", { min: 0, max: 100000, step: 1, type: "int" }) +
           ctl("Grant basis / share", base + ".grantBasisUsd", { min: 0, max: 5000, step: 1 }) +
-          ctl("Ordinary tax % (on basis)", base + ".ordinaryTaxRate", { min: 0, max: 60, step: 1, suffix: "%" }) +
+          ctl("Ordinary tax % (on basis, flat)", base + ".ordinaryTaxRate", { min: 0, max: 60, step: 1, suffix: "%" }) +
           ctl("Capital-gains % (appreciation)", base + ".capGainsRate", { min: 0, max: 50, step: 1, suffix: "%" }) +
           ctl("Expected growth / yr", base + ".growth", { min: -5, max: 25, step: 0.1, suffix: "%" });
       }

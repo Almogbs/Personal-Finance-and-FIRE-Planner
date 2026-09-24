@@ -80,24 +80,45 @@ goes to `income.defaultAccountId`. With no rules, the entire surplus goes to the
 
 ## RSU (Section-102 capital-gains track, modeled)
 
-Given `sharesPerYear`, `grantBasisUsd`, `ordinaryTaxRate`, `capGainsRate`:
+The taxable event is the **sale** (release from the trustee), not the vest. Shares enter the grant
+account **gross** and carry a deferred tax liability; nothing is paid until they are sold.
 
 ```
 grossILS     = shares * sharePrice * usdIls
-ordinaryBase = shares * grantBasisUsd * usdIls
+ordinaryBase = shares * grantBasisUsd * usdIls     ← pinned to grant date, never grows
 appreciation = max(0, grossILS - ordinaryBase)
-tax          = ordinaryBase * ordinaryTaxRate + appreciation * capGainsRate
-netILS       = grossILS - tax
 ```
 
-- **Currently vested shares** seed a virtual, per-grant net-value account. Each grant also appears as a
-  **computed (read-only) card on the Accounts page** — edit it via the Income page.
+At the moment of sale, on a pro-rata share of the account:
+
+```
+ordinaryTax  = marginal income tax on ordinaryBase, STACKED on the sale year's
+               other ordinary taxable income (salary + taxable pension)
+capGainsTax  = appreciation * capGainsRate
+```
+
+So the grant-basis slice is priced with the real progressive brackets (`TAX_BRACKETS`, the same table
+used for salary and pension), not a flat rate. Selling two grants in one year pushes the second slice
+into higher brackets, exactly as a tax return would.
+
+- **Currently vested shares** seed a virtual, per-grant **gross**-value account. Each grant also
+  appears as a **computed (read-only) card on the Accounts page** — edit it via the Income page.
 - **Future vests** (while working — i.e. before the retirement/FIRE age) use a share price grown at the
-  grant's own expected-return assumption: `sharePrice * (1 + expectedGrowthPct/100)^k`. Their after-tax
+  grant's own expected-return assumption: `sharePrice * (1 + expectedGrowthPct/100)^k`. Their **gross**
   value is added to the grant account, which then compounds at that return (models "hold the shares").
   New vesting is bounded by each grant's own `[startAge, stopAge)` window (see the grants section below).
+- **Reported balances are net of the deferred tax.** Net worth, liquid, and the FIRE-eligible pot all
+  subtract the tax that would fall due if the account were sold in that year, so the plan is never
+  flattered by money owed to the tax authority. Each projection row also carries `rsuDeferredTax`.
+- Because the tax is no longer taken years early, the amount that would have gone to tax at vest keeps
+  compounding until the sale — which is what actually happens when you hold Section-102 shares.
 
-This is a simplification: it does not model per-lot holding periods, exact trustee rules, the 3% surtax,
+The per-grant `ordinaryTaxRate` field is now only a **fallback flat rate for the what-if switch tool**,
+which compares holding vs switching at a horizon and has no modeled sale year to stack onto.
+
+This is still a simplification: it does not model per-lot holding periods, the 24-month trustee holding
+requirement, exact trustee mechanics, National Insurance / health tax on the ordinary slice, the 3%
+surtax,
 US-Israel treaty interactions, or partial sales.
 
 ## Spending
@@ -144,14 +165,14 @@ projection. Net take-home then grows by `salaryGrowthPct`. All rates are editabl
 
 ## RSU / equity grants
 
-`state.income.grants` is a list (zero, one, or many). Each grant is a virtual, computed equity account:
+`state.income.grants` is a list (zero, one, or many). Each grant is a virtual, computed equity account
+holding **gross** share value plus a deferred Section-102 liability:
 
 ```
 fx        = grant.currency === 'ILS' ? 1 : usdIls
 gross     = shares × price × fx
-ordinary  = shares × grantBasisUsd × fx
-tax       = ordinary × ordinaryTaxRate + max(0, gross − ordinary) × capGainsRate
-net       = gross − tax
+ordinary  = shares × grantBasisUsd × fx      ← deferred; taxed at marginal rate on sale
+apprec    = max(0, gross − ordinary)         ← taxed at capGainsRate on sale
 ```
 
 - Already-vested shares (`vestedShares` at `sharePrice`) seed the account's balance.
@@ -164,8 +185,10 @@ net       = gross − tax
 - Otherwise, new vests (`sharesPerYear`) are added each year while employed **and** within the grant's
   `[startAge, stopAge)` window, priced at `sharePrice × (1 + expectedGrowthPct)^k`. This lets you start a
   grant later, stop a grant early, or remove grants entirely (an empty list = no RSU).
-- The account then compounds at the grant's `expectedGrowthPct`; selling it later pays capital-gains tax
-  on the appreciation (per the withdrawal model).
+- The account then compounds at the grant's `expectedGrowthPct`. Because the ordinary slice is pinned to
+  grant-date value, all of that growth is capital gain. Selling pays both components at once (see the
+  withdrawal model); the gross sale needed to deliver a given net amount is solved by bisection, since
+  progressive brackets make the effective rate a function of the sale size.
 
 ## Pension income (Israeli rules)
 
@@ -311,7 +334,13 @@ projected spending (categories/steps), so it reflects the plan you've modeled ra
 - Capital-gains tax on taxable-account drawdowns is modeled on the **gain portion only** (basis from
   `costBasis`/`gainPct`); it does not model per-lot holding periods, loss harvesting, or the exact
   Israeli reporting rules.
-- No Bituach Leumi / health tax modeling on income.
+- RSU Section-102 ordinary income is stacked on the sale year's **salary and taxable pension** only.
+  In net salary mode the take-home figure is used as the stacking base (gross mode knows the real
+  taxable base), which understates the bracket while still working.
+- No capital-gains surtax: `capGainsRate` is flat, so it ignores the extra surtax on capital-source
+  income above the top threshold.
+- No Bituach Leumi / health tax modeling on income, including on the Section-102 ordinary slice (which
+  is employment income in reality) or during early retirement.
 - Pension drawdown treated as liquid from access age; annuity shown only as an estimate.
 
 These are deliberate: the goal is a fast, transparent, tweakable planning tool, not a tax engine.

@@ -43,6 +43,39 @@
     return tax;
   }
 
+  // Marginal cost of stacking `amount` of ordinary income on top of `base`
+  // (both annual, nominal ₪). This is what a slice of income actually costs at
+  // the taxpayer's real bracket, rather than at a guessed flat rate.
+  function marginalTaxOn(amount, base, factor) {
+    if (amount <= 0) return 0;
+    base = Math.max(0, base || 0);
+    return incomeTaxAnnual(base + amount, factor) - incomeTaxAnnual(base, factor);
+  }
+
+  /* ---- Progressive pricing for Section-102 ordinary income ----------------
+   * Returns a resolver for `state.grantNet`'s `ordinaryTax` hook. It is
+   * STATEFUL on purpose: each slice it prices is added to the running stack, so
+   * selling several grants in one year pushes later slices into higher brackets
+   * exactly as a real tax return would. `base` is the year's other ordinary
+   * taxable income (salary, taxable pension).
+   *-----------------------------------------------------------------------*/
+  function ordinaryTaxStacker(base, factor) {
+    let stacked = Math.max(0, base || 0);
+    return function (amount) {
+      const tax = marginalTaxOn(amount, stacked, factor);
+      stacked += Math.max(0, amount);
+      return tax;
+    };
+  }
+
+  // The year's ordinary taxable income from salary, for stacking. Gross mode
+  // knows the real taxable base; net mode only stores take-home, which
+  // understates it — documented in docs/MODEL.md.
+  function taxableSalaryAnnual(state, payroll) {
+    if (payroll) return payroll.taxableBase * 12;
+    return (state.income.monthlyNetSalary || 0) * 12;
+  }
+
   function toILS(acc, usdIls) {
     return acc.currency === "USD" ? acc.balance * usdIls : acc.balance;
   }
@@ -75,6 +108,17 @@
     return { grossCash, imputations, taxableBase, gross: grossCash, pensionable, khBase, incomeTax, niHealth, empPension, empKH, employerPension, severance, employerKH, net, pensionDeposit, khDeposit };
   }
 
+  /* ---- Section-102 ordinary tax resolver for "sell today" views -----------
+   * Prices the ordinary slice of a grant sale at the marginal rate, stacked on
+   * this year's salary. Used by the dashboard snapshot so its RSU figure agrees
+   * with the projection's; the projection builds its own stacker per year (it
+   * also has pension income to stack on).
+   *-----------------------------------------------------------------------*/
+  function grantOrdinaryTaxFor(state) {
+    const payroll = state.income.salaryMode === "gross" ? computePayroll(state) : null;
+    return ordinaryTaxStacker(taxableSalaryAnnual(state, payroll), 1);
+  }
+
   /* ---- Current-state snapshot (t0), for the dashboard --------------------- */
   function snapshot(state) {
     const usdIls = state.market.usdIls;
@@ -84,8 +128,11 @@
       accessAge: a.accessAge || 0,
     }));
 
-    // Each grant is a virtual, computed equity account (vested value, net).
-    const gv = FIRE.state.grantsVested(state);
+    // Each grant is a virtual, computed equity account. Its Section-102 tax is
+    // only due on sale, so "net" here means "what you'd keep selling today" —
+    // the ordinary slice priced at your real marginal rate on top of this
+    // year's salary, not at a flat guess.
+    const gv = FIRE.state.grantsVested(state, grantOrdinaryTaxFor(state));
     gv.per.forEach((pg) => {
       if (pg.net > 0 || pg.gross > 0) {
         accounts.push({ id: "grant-" + pg.grant.id, name: pg.grant.name + " (vested net)", kind: "rsu", currency: pg.grant.currency, valueILS: pg.net, liquid: true, includeInFire: true, accessAge: 0 });
@@ -278,12 +325,18 @@
     return { payMonthly: payNow, payNow, payMax, months, totalPaid, totalInterest: L.totalInterest, payByYear, balByYear };
   }
 
-  /* ---- After-tax value of one year's vest for a grant, at projection year k */
-  function grantVestNetAtYear(grant, usdIls, k) {
+  /* ---- One year's vest for a grant, at projection year k -------------------
+   * Returns the GROSS value and the ordinary-income slice. No tax is taken
+   * here: under the Section-102 capital-gains track the tax event is the sale,
+   * so the shares enter the grant account gross and the ordinary slice is
+   * carried as a deferred liability until they are sold.
+   *-----------------------------------------------------------------------*/
+  function grantVestAtYear(grant, usdIls, k) {
     const shares = grant.sharesPerYear || 0;
-    if (shares <= 0) return 0;
+    if (shares <= 0) return { gross: 0, ordinary: 0 };
     const price = grant.sharePrice * Math.pow(1 + (grant.expectedGrowthPct || 0) / 100, k);
-    return FIRE.state.grantNet(grant, usdIls, shares, price).net;
+    const r = FIRE.state.grantNet(grant, usdIls, shares, price);
+    return { gross: r.gross, ordinary: r.ordinary };
   }
 
   /* ---- Full projection ----------------------------------------------------
@@ -314,16 +367,20 @@
     });
 
     // Each equity grant is a virtual account seeded with its currently-vested
-    // net value; it compounds at the grant's own expected growth. We keep a
-    // parallel list of { acc, grant } so the yearly loop can add new vests.
+    // GROSS value; it compounds at the grant's own expected growth. Section-102
+    // tax is deferred to the sale, so each account also carries `ord` — the
+    // ordinary-income slice (shares × grant basis, in ₪). That slice is pinned
+    // to grant-date value and never grows; everything above it is capital gain.
+    // `basis` mirrors `ord` so the generic gain-fraction readers stay correct.
     const grantAccs = [];
     (state.income.grants || []).forEach((g) => {
       const gnow = FIRE.state.grantNet(g, usdIls, FIRE.state.vestedSharesOf(state, g), g.sharePrice);
       const acc = {
         id: "grant-" + g.id, name: g.name + " (net)", kind: "rsu", group: "RSU / equity",
         ret: g.expectedGrowthPct || 0, contrib: 0, contribGrowth: 0,
-        liquid: true, includeInFire: true, accessAge: 0, bal: gnow.net,
-        basis: gnow.net, cg: g.capGainsRate || 25, annuityGrossAnnual: null,
+        liquid: true, includeInFire: true, accessAge: 0, bal: gnow.gross,
+        basis: gnow.ordinary, ord: gnow.ordinary, isGrant: true,
+        cg: g.capGainsRate || 25, annuityGrossAnnual: null,
       };
       accs.push(acc);
       grantAccs.push({ acc, grant: g });
@@ -363,6 +420,15 @@
       if (acc.kind === "pension" && acc.feeDeposit) amt *= 1 - acc.feeDeposit / 100;
       acc.bal += amt; acc.basis += amt;
     }
+    // Vesting shares into a grant account: gross grows the balance, the
+    // ordinary slice grows the deferred Section-102 liability. Untaxed here —
+    // nothing is owed until the shares are sold.
+    function depositGrant(acc, gross, ordinary) {
+      if (!acc || !(gross > 0)) return;
+      acc.bal += gross;
+      acc.ord += Math.max(0, ordinary || 0);
+      acc.basis = acc.ord;
+    }
     function distributeSurplus(surplus) {
       let remaining = surplus;
       allocations.forEach((al) => {
@@ -374,6 +440,30 @@
         remaining -= amt;
       });
       deposit(defaultAcc, remaining); // "the rest" → your default account
+    }
+
+    // ---- Section-102 sale pricing for grant accounts ----------------------
+    // Tax due on selling `gross` from a grant account: its pro-rata ordinary
+    // slice at the MARGINAL rate on top of `stackBase` (the year's other
+    // ordinary taxable income), plus capital gains on the appreciation above it.
+    function grantSaleTax(a, gross, stackBase, factor) {
+      if (!(gross > 0) || !(a.bal > 0)) return 0;
+      const frac = Math.min(1, gross / a.bal);
+      const ord = a.ord * frac;
+      const gain = Math.max(0, gross - ord);
+      return marginalTaxOn(ord, stackBase, factor) + gain * (a.cg / 100);
+    }
+    // Gross sale that nets exactly `wantNet`. Tax rises monotonically with the
+    // sale size (progressive brackets + capital gains), so bisect rather than
+    // trying to invert a piecewise rate.
+    function grantGrossForNet(a, wantNet, stackBase, factor) {
+      let lo = Math.min(wantNet, a.bal), hi = a.bal;
+      for (let i = 0; i < 48 && hi - lo > 0.5; i++) {
+        const mid = (lo + hi) / 2;
+        if (mid - grantSaleTax(a, mid, stackBase, factor) < wantNet) lo = mid;
+        else hi = mid;
+      }
+      return Math.min(a.bal, hi);
     }
 
     // Salary: gross mode computes net + infers pension/study-fund deposits;
@@ -414,14 +504,18 @@
       if (year === 2025) return 57;
       return 52;
     }
-    // Tax on an annual gross pension, given the year's inflation factor. The
-    // exemption applies only from `exemptionFromAge` and can be turned off
-    // (e.g. when the exempt capital was already used by a lump-sum היוון).
-    function pensionTaxAnnual(grossAnnual, factor, atAge, year, useExemption) {
+    // Taxable portion of an annual gross pension, given the year's inflation
+    // factor. The exemption applies only from `exemptionFromAge` and can be
+    // turned off (e.g. when the exempt capital was already used by a lump-sum
+    // היוון). Split out from pensionTaxAnnual because the taxable figure is also
+    // the stacking base for other ordinary income in the same year.
+    function pensionTaxableAnnual(grossAnnual, factor, atAge, year, useExemption) {
       const eligible = useExemption !== false && (atAge == null || atAge >= pcfg.exemptionFromAge);
       const exemptAnnual = eligible ? (exemptionPctAt(year) / 100) * (pcfg.ceiling * factor) * 12 : 0;
-      const taxable = Math.max(0, grossAnnual - exemptAnnual);
-      return incomeTaxAnnual(taxable, factor);
+      return Math.max(0, grossAnnual - exemptAnnual);
+    }
+    function pensionTaxAnnual(grossAnnual, factor, atAge, year, useExemption) {
+      return incomeTaxAnnual(pensionTaxableAnnual(grossAnnual, factor, atAge, year, useExemption), factor);
     }
     const pensionConv = { potAtAccess: 0, grossAnnual: 0, annuitizedPot: 0, factor: 1, age: null, year: null };
     // Lump-mode bookkeeping across pension accounts: how much pot has been
@@ -464,7 +558,9 @@
         });
       }
 
-      // 3) New grant vests (after tax), while employed (age < fireAge).
+      // 3) New grant vests, while employed (age < fireAge). Shares enter GROSS
+      //    with their ordinary slice recorded as deferred tax — under the
+      //    Section-102 capital-gains track nothing is owed until they are sold.
       //    A grant with an explicit vesting schedule (dated events) uses it —
       //    each event vests its own share count on its own date, priced at the
       //    grant's growth compounded to that date. Events already in the past
@@ -480,12 +576,16 @@
               if (d <= asOf) return; // on/before as-of → already in the vested seed
               const yrs = Math.max(0, (d - asOf) / (365.25 * 24 * 3600 * 1000));
               const price = grant.sharePrice * Math.pow(1 + (grant.expectedGrowthPct || 0) / 100, yrs);
-              deposit(acc, FIRE.state.grantNet(grant, usdIls, v.shares, price).net);
+              const r = FIRE.state.grantNet(grant, usdIls, v.shares, price);
+              depositGrant(acc, r.gross, r.ordinary);
             });
           } else {
             const start = grant.startAge != null ? grant.startAge : A0;
             const stop = grant.vestUntilRetire ? fireAge : (grant.stopAge != null ? grant.stopAge : fireAge);
-            if (age >= start && age < stop) deposit(acc, grantVestNetAtYear(grant, usdIls, k) * yf);
+            if (age >= start && age < stop) {
+              const v = grantVestAtYear(grant, usdIls, k);
+              depositGrant(acc, v.gross * yf, v.ordinary * yf);
+            }
           }
         });
       }
@@ -544,7 +644,7 @@
       //  default liquid account. Pension balance goes to ₪0; no further
       //  contributions or growth. The money is now in regular liquid savings.
       const inflFactor = Math.pow(1 + infl, k);
-      let pensionGross = 0, pensionTax = 0, pensionNet = 0;
+      let pensionGross = 0, pensionTax = 0, pensionNet = 0, pensionTaxable = 0;
       let pensionLumpGross = 0, pensionLumpTax = 0, pensionLumpNet = 0;
 
       accs.forEach((a) => {
@@ -633,6 +733,7 @@
       // mode the exemption is gone if the lump consumed the exempt capital.
       if (pensionGross > 0) {
         const useEx = pcfg.mode === "annuity" ? true : !lumpUsedExemption;
+        pensionTaxable = pensionTaxableAnnual(pensionGross, inflFactor, age, rowYear, useEx);
         pensionTax = pensionTaxAnnual(pensionGross, inflFactor, age, rowYear, useEx);
         pensionNet = pensionGross - pensionTax;
       }
@@ -642,6 +743,14 @@
       //    accounts (selling from taxable pots incurs capital-gains tax, so the
       //    gross sale exceeds the net cash needed). We track the source of each
       //    withdrawal.
+      //
+      //    `ordStackBase` is this year's other ordinary taxable income. Selling
+      //    grant shares realizes Section-102 ordinary income, which stacks on
+      //    top of it — so each sale is priced at the real bracket, and a second
+      //    sale in the same year is priced above the first.
+      let ordStackBase = (working ? taxableSalaryAnnual(state, payroll)
+            * Math.pow(1 + (state.income.salaryGrowthPct || 0) / 100, k) * yf : 0)
+        + pensionTaxable;
       const incomeTotal = salary + extra + pensionNet + oldAge + rentIncome;
       let net = incomeTotal - spend - mortgagePay;
       const sources = {}; // accountId -> net ₪ drawn for living this year
@@ -673,6 +782,32 @@
               if (!a.liquid) continue;
               if (a.accessAge && age < a.accessAge) continue;
             }
+            if (a.isGrant) {
+              // Section-102 capital-gains track: the tax falls due HERE, on the
+              // sale — not back when the shares vested. The ordinary slice is
+              // priced at this year's marginal rate; the appreciation above it
+              // at the grant's capital-gains rate.
+              const fullTax = grantSaleTax(a, a.bal, ordStackBase, inflFactor);
+              const deliverable = Math.max(0, a.bal - fullTax);
+              if (deliverable <= 1e-6) continue;
+              const takeNet = Math.min(needNet, deliverable);
+              const grossSale = takeNet >= deliverable - 1e-6
+                ? a.bal
+                : grantGrossForNet(a, takeNet, ordStackBase, inflFactor);
+              const ordSold = a.ord * (grossSale / a.bal);
+              const tax = grantSaleTax(a, grossSale, ordStackBase, inflFactor);
+              const netGot = Math.max(0, grossSale - tax);
+              a.bal -= grossSale;
+              a.ord = Math.max(0, a.ord - ordSold);
+              a.basis = a.ord;
+              ordStackBase += ordSold; // later sales this year stack on top
+              needNet -= netGot;
+              withdrawalNet += netGot;
+              withdrawalGross += grossSale;
+              withdrawalTax += tax;
+              sources[a.id] = (sources[a.id] || 0) + netGot;
+              continue;
+            }
             const gainFrac = a.bal > 0 ? Math.max(0, (a.bal - a.basis) / a.bal) : 0;
             const effRate = gainFrac * (a.cg / 100); // effective tax per ₪ sold
             const deliverable = a.bal * (1 - effRate); // net if fully liquidated
@@ -693,8 +828,18 @@
       // 7) Record.
       const perAccount = {};
       let total = 0, liquid = 0, nonPension = 0, pension = 0, fireEligible = 0;
+      // Grant accounts hold GROSS shares, so report them net of the Section-102
+      // tax that would fall due on sale — otherwise net worth and the FIRE
+      // target are flattered by money that is owed to the tax authority.
+      let rsuDeferredTax = 0, reportStack = ordStackBase;
       accs.forEach((a) => {
-        const v = Math.max(0, a.bal);
+        let v = Math.max(0, a.bal);
+        if (a.isGrant && v > 0) {
+          const t = grantSaleTax(a, v, reportStack, inflFactor);
+          reportStack += a.ord;
+          rsuDeferredTax += t;
+          v = Math.max(0, v - t);
+        }
         perAccount[a.id] = v;
         total += v;
         if (a.kind === "pension") pension += v; else nonPension += v;
@@ -715,7 +860,7 @@
         incomeTotal, pensionGross, pensionTax, pensionNet, oldAge,
         pensionLumpGross, pensionLumpTax, pensionLumpNet,
         reValue, reDebt, reEquity, rentIncome, mortgagePay,
-        withdrawalNet, withdrawalGross, withdrawalTax, sources,
+        withdrawalNet, withdrawalGross, withdrawalTax, sources, rsuDeferredTax,
         perAccount, total, liquid, nonPension, pension, fireEligible,
         realFactor,
       });
@@ -1090,5 +1235,5 @@
     return { found: false, age: null, yearsAway: null };
   }
 
-  FIRE.engine = { project, snapshot, monthlySpend, spendSourceAt, stepAt, listIdAt, categoriesAt, spendBreakdown, grantVestNetAtYear, earliestFireAge, coastFireAge, baristaFireAge, monteCarlo, safeFireAge, MC_DEFAULT_VOL, loanSchedule, loanTrackOf, LOAN_TRACKS, computePayroll, holdings, switchScenario, WITHDRAW_PRIORITY };
+  FIRE.engine = { project, snapshot, monthlySpend, spendSourceAt, stepAt, listIdAt, categoriesAt, spendBreakdown, grantVestAtYear, grantOrdinaryTaxFor, earliestFireAge, coastFireAge, baristaFireAge, monteCarlo, safeFireAge, MC_DEFAULT_VOL, loanSchedule, loanTrackOf, LOAN_TRACKS, computePayroll, holdings, switchScenario, WITHDRAW_PRIORITY };
 })();
