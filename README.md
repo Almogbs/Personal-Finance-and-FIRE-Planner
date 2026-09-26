@@ -94,6 +94,8 @@ fire-planner/
 - **Separation of concerns:** `engine.js` is pure (no DOM) and unit-testable in Node; `ui.js` only renders;
   `app.js` wires events; `state.js` owns persistence.
 - **Persistence:** autosave to `localStorage` on every change, plus explicit JSON export/import.
+- **Tests:** `node --test tests/` (Node 18+, no dependencies) loads `state.js` + `engine.js` and checks
+  the projection engine.
 
 See **[docs/MODEL.md](docs/MODEL.md)** for the calculation details and **[docs/USAGE.md](docs/USAGE.md)** for a page-by-page guide.
 

@@ -290,9 +290,10 @@ function mountPage() {
       const togo = st.profile.fireAge - st.profile.currentAge;
       const togoLbl = togo <= 0 ? "retired 🎉" : FIRE.ui.fmtAgeYM(togo) + " to go";
       badge.innerHTML =
-        '<span class="hdr-metric">Net worth <b>' + FIRE.ui.money(snap.total) + "</b></span>" +
+        '<span class="hdr-metric">Total assets <b>' + FIRE.ui.money(snap.total) + "</b></span>" +
+        '<span class="hdr-metric">Liquid (after tax) <b>' + FIRE.ui.money(snap.liquid) + "</b></span>" +
         '<span class="hdr-metric">Retire <b>' + FIRE.ui.eventLabel(st, st.profile.fireAge) + "</b></span>" +
-        '<span class="hdr-metric hdr-hide-sm">NW @ retirement <b>' + FIRE.ui.money(p.fireRow ? p.fireRow.total : 0) + "</b></span>" +
+        '<span class="hdr-metric hdr-hide-sm">Total @ retirement <b>' + FIRE.ui.money(p.fireRow ? p.fireRow.total : 0) + "</b></span>" +
         '<span class="hdr-metric hdr-hide-sm"><b>' + togoLbl + "</b></span>" +
         '<span class="hdr-metric">' + (p.survives ? '<span class="ok">✓ survives to ' + st.profile.endAge + "</span>" : '<span class="bad">✕ depletes ' + FIRE.ui.eventLabel(st, p.depletionAge) + "</span>") + "</span>";
     }

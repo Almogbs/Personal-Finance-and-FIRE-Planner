@@ -1,7 +1,8 @@
 # Usage — page by page
 
 Open `index.html`. Your plan **autosaves** to the browser as you go. The header always shows your plan
-name, current net worth, **retirement year (with your exact age)**, **net worth at retirement**,
+name, **total assets** (before tax), **liquid** (after tax), **retirement year (with your exact age)**,
+**total assets at retirement**,
 **time to retirement (years + months)**, and whether the plan survives to your end age.
 
 **Dates & ages**: projection rows are calendar-year aligned, so the app always pairs an **absolute
@@ -9,12 +10,14 @@ year** with your **exact age (years + months)** from your date of birth — e.g.
 your birth date on Market & Assumptions to enable this (without it, integer ages are shown).
 
 ## 📊 Dashboard
-Read-only overview. Metric cards — current net worth, liquid, pension, **retirement spend**, plan
-status, net worth at the end age, **time to retirement (y+m)**, **savings rate now**, **net worth at
-retirement**, **liquid (excl. pension) at retirement**, and the **withdrawal rate you'd need at
-retirement** — plus a net-worth line, current allocation doughnut, an **allocation-at-retirement**
+Read-only overview. Metric cards — **total assets** (everything before tax, incl. pension, RSU and real
+estate), **liquid (after tax)** (what selling every non-pension account today would give you), pension,
+**retirement spend**, plan status, total assets at the end age, **time to retirement (y+m)**, **savings
+rate now**, **total assets at retirement**, **liquid (after tax) at retirement**, and the **withdrawal
+rate you'd need at retirement** (spend ÷ after-tax liquid) — plus a total-vs-liquid line, current
+allocation doughnut, an **allocation-at-retirement**
 doughnut, liquid-vs-pension stacked chart, and a **Retirement readiness** panel. All of
-it is based on your **real** projected spending: your non-pension assets at retirement age, your modeled
+it is based on your **real** projected spending: your after-tax liquid assets at retirement age, your modeled
 retirement spend that year, how many years that pot covers, and whether the plan survives to your end age.
 (The theoretical fixed-spend / SWR portfolio target lives on the 🔥 FIRE tab, not here.)
 
@@ -67,8 +70,8 @@ Global levers (drag the sliders):
 The theoretical FIRE target maths, kept separate from your real spending:
 - Set a **fixed FIRE monthly spend** and a **safe withdrawal rate (SWR)**; see the portfolio you'd need at
   your SWR and at the classic 4% / 3.5% / 3% rules (and the equivalent ×-annual multiples), plus what your
-  current net worth could sustain per month at that rate.
-- A **coverage bar** compares your projected non-pension assets at your retirement age to the target, and
+  current after-tax liquid assets could sustain per month at that rate.
+- A **coverage bar** compares your projected after-tax liquid assets at your retirement age to the target, and
   the **earliest retirement age** (computed from your *real* categories/steps) is shown with a one-click
   apply button.
 - A **sensitivity chart** shows years-to-target across a range of expected returns.
@@ -223,7 +226,8 @@ Income vs spending line — now shows **salary+extra**, **net pension**, **withd
 and **spending**, with a note listing lifetime withdrawals by **source group** and total taxes
 (capital-gains on withdrawals + pension income tax).
 - **Year-by-year table**: one row per **calendar year** (with your exact age at year-end) with income,
-  spend, each group's balance, total, and liquid. The retirement-year row is highlighted (readable in
+  spend, each group's balance (before tax), total assets, and liquid (after tax). The CSV export adds
+  `liquid_tax`. The retirement-year row is highlighted (readable in
   both light and dark mode); a depletion year (if any) is flagged red.
 - **Income & withdrawals by phase** — a plain-language list that groups consecutive years with the same
   income/withdrawal pattern into ranges, e.g. "2037–2045 (ages 41–49) — Retired: withdraw ~₪X/yr net from

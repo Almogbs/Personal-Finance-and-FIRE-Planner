@@ -3,6 +3,33 @@
 All notable changes are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## 1.32.0
+
+- **All balances are shown before tax, RSU grants included.** Grants were previously reported net of
+  their deferred Section-102 tax while every other account was gross; now every account, group total,
+  stacked chart, table column and CSV value is before tax.
+- **Two headline figures everywhere — Total assets and Liquid (after tax).**
+  - *Total assets*: every account before tax, including pension, grants and real-estate equity.
+  - *Liquid (after tax)*: what selling every non-pension financial account would put in your hand —
+    capital-gains tax on money-market/taxable/custom gains, the full Section-102 sale tax on grants
+    (ordinary slice at your marginal rate, stacked), nothing on cash or the study fund. Pension and
+    real estate are excluded. Computed for today and for every projection year; the tax is exposed as
+    `liquidTax` (CSV `liquid_tax`).
+  - Shown on the Dashboard (now, at retirement, chart), the header, the Projections table and CSV,
+    and the Coast/Barista tables and charts.
+  - FIRE coverage, the withdrawal rate at retirement, the "could sustain X/mo" figure and the return
+    sensitivity chart now use the after-tax Liquid.
+  - The previous "drawable this year" sum is still available as `drawable`.
+- **Start-of-month timing.** Contributions, vests, income, spending, surplus deposits and withdrawals
+  all happen on the first day of the month; growth is applied after them. Surplus is invested in the
+  month it arises (fixed allocation rules are ₪/month) instead of at year end. A deficit first reverses
+  that calendar year's own surplus deposits, untaxed, before selling anything — so a year that is
+  net-positive overall still never sells.
+- **Tests.** `node --test tests/` runs engine tests (valuation, timing, no-spurious-selling across plan
+  shapes, same-year pull-back). No dependencies.
+- *Note:* Predictions actuals saved before this version stored the older total (grants after tax), so
+  they read slightly low against the new before-tax predictions. Re-save the year to refresh.
+
 ## 1.31.0
 
 - **The engine is now a real monthly model.** `project()` integrates in calendar months and aggregates

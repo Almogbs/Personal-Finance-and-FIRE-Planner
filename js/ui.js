@@ -106,7 +106,7 @@
         '<p class="lead">Your personal-finance workbench — track <b>expenses</b>, manage your <b>portfolio &amp; allocation</b>, and project <b>FIRE</b>. Tweak anything on the other pages and watch this update.</p>' +
         '<div class="metric-grid" id="dash-metrics"></div>' +
         '<div class="grid-2">' +
-          '<div class="panel"><h3>Net worth over time</h3><canvas id="dash-nw" height="260"></canvas></div>' +
+          '<div class="panel"><h3>Total assets vs liquid (after tax) over time</h3><canvas id="dash-nw" height="260"></canvas></div>' +
           '<div class="panel"><h3>Current allocation</h3><canvas id="dash-alloc" height="260"></canvas></div>' +
         "</div>" +
         '<div class="grid-2">' +
@@ -131,8 +131,8 @@
       const retLbl = eventLabel(st, st.profile.fireAge); // e.g. "2041 (age 45y 3m)"
       const m = el.querySelector("#dash-metrics");
       m.innerHTML =
-        card("Current net worth", money(snap.total), "incl. pension, vested RSU" + (snap.reEquity ? " & real estate" : "")) +
-        card("Liquid (excl. pension)", money(snap.nonPension), "spendable before pension access") +
+        card("Total assets", money(snap.total), "before tax — all accounts incl. pension, RSU" + (snap.reEquity ? " & real estate" : "")) +
+        card("Liquid (after tax)", money(snap.liquid), "if you sold everything today, excl. pension" + (snap.reEquity ? " & real estate" : "") + " · tax " + money(snap.liquidTax)) +
         card("Pension", money(snap.pension), "locked until " + eventLabel(st, st.profile.pensionAccessAge)) +
         (snap.reValue || snap.reDebt
           ? card("Real estate equity", money(snap.reEquity), money(snap.reValue) + " value − " + money(snap.reDebt) + " debt")
@@ -146,7 +146,7 @@
         (function () {
           const yrs = p.endAge - p.A0;
           const nom = p.endNetWorth, rl = nom / Math.pow(1 + st.assumptions.inflation / 100, yrs);
-          return card("Net worth @ " + st.profile.endAge, money(real ? rl : nom),
+          return card("Total assets @ " + st.profile.endAge, money(real ? rl : nom),
             real ? ("nominal " + money(nom)) : ("≈ " + money(rl) + " in today's ₪"));
         })() +
         (function () {
@@ -161,17 +161,17 @@
         (function () {
           const fr = p.fireRow; const nom = fr ? fr.total : 0;
           const rl = fr ? nom / Math.pow(1 + st.assumptions.inflation / 100, fr.k) : 0;
-          return card("Net worth @ retirement", money(real ? rl : nom), retLbl + (real ? " (today's ₪)" : ""));
+          return card("Total assets @ retirement", money(real ? rl : nom), "before tax · " + retLbl + (real ? " (today's ₪)" : ""));
         })() +
         (function () {
-          const fr = p.fireRow; const nom = fr ? fr.nonPension : 0;
+          const fr = p.fireRow; const nom = fr ? fr.liquid : 0;
           const rl = fr ? nom / Math.pow(1 + st.assumptions.inflation / 100, fr.k) : 0;
-          return card("Liquid (excl. pension) @ retirement", money(real ? rl : nom), retLbl + (real ? " (today's ₪)" : ""));
+          return card("Liquid (after tax) @ retirement", money(real ? rl : nom), "if sold that year, excl. pension · " + retLbl + (real ? " (today's ₪)" : ""));
         })() +
         (function () {
           const fr = p.fireRow; const spYr = FIRE.engine.monthlySpend(st, Math.round(st.profile.fireAge)) * 12;
-          const wr = fr && fr.nonPension > 0 ? (spYr / fr.nonPension) * 100 : 0;
-          return card("Withdrawal rate @ retirement", wr > 0 ? wr.toFixed(1) + "%" : "–", "real spend ÷ non-pension assets");
+          const wr = fr && fr.liquid > 0 ? (spYr / fr.liquid) * 100 : 0;
+          return card("Withdrawal rate @ retirement", wr > 0 ? wr.toFixed(1) + "%" : "–", "real spend ÷ after-tax liquid");
         })();
 
       // Net worth line (x-axis = calendar years; tooltip shows the year)
@@ -179,8 +179,8 @@
       C.line(el.querySelector("#dash-nw"), {
         labels,
         series: [
-          { name: real ? "Total (real)" : "Total", data: p.rows.map((r) => adj(r.total, r.k)), color: "#2f7ed8" },
-          { name: "Liquid", data: p.rows.map((r) => adj(r.liquid, r.k)), color: "#59a14f" },
+          { name: real ? "Total assets (real)" : "Total assets", data: p.rows.map((r) => adj(r.total, r.k)), color: "#2f7ed8" },
+          { name: "Liquid (after tax)", data: p.rows.map((r) => adj(r.liquid, r.k)), color: "#59a14f" },
         ],
       });
 
@@ -216,7 +216,7 @@
         labels,
         stacked: true,
         series: [
-          { name: "Liquid/non-pension", data: p.rows.map((r) => adj(r.nonPension, r.k)), color: "#76b7b2" },
+          { name: "Non-pension (before tax)", data: p.rows.map((r) => adj(r.nonPension, r.k)), color: "#76b7b2" },
           { name: "Pension", data: p.rows.map((r) => adj(r.pension, r.k)), color: "#b07aa1" },
         ],
       });
@@ -227,10 +227,10 @@
       const faR = Math.round(st.profile.fireAge);
       const spMo = FIRE.engine.monthlySpend(st, faR);
       const spYr = spMo * 12;
-      const nonPen = fireRow ? fireRow.nonPension : 0;
+      const nonPen = fireRow ? fireRow.liquid : 0;
       const runway = spYr > 0 ? nonPen / spYr : 0;
       el.querySelector("#dash-fire").innerHTML =
-        "<p>Retiring in <b>" + retLbl + "</b>, projected non-pension assets are <b>" + money(nonPen) + "</b>.</p>" +
+        "<p>Retiring in <b>" + retLbl + "</b>, projected liquid assets (after tax, excl. pension) are <b>" + money(nonPen) + "</b>.</p>" +
         "<p>Your modeled spending that year is <b>" + money(spMo) + "/mo</b> (" + money(spYr) + "/yr) — from your real categories &amp; steps.</p>" +
         "<p>That pot alone covers ≈ <b>" + runway.toFixed(0) + "×</b> your first retirement year (before further growth &amp; pension).</p>" +
         '<div class="callout">' + (p.survives ? '<span class="ok">✓ Plan survives to ' + st.profile.endAge + "</span>" : '<span class="bad">✕ Depletes ' + eventLabel(st, p.depletionAge) + "</span>") + " when retiring " + retLbl + ", using your real spending.</div>" +
@@ -309,12 +309,12 @@
       const gv = snap.grants;
       const rsuCard = gv && gv.per.some((pg) => pg.gross > 0) ? (
         '<div class="acc-group">' +
-          '<div class="acc-group-head"><h3>Equity — grants (computed)</h3><span class="acc-group-total">' + money(gv.net) + "</span></div>" +
+          '<div class="acc-group-head"><h3>Equity — grants (computed)</h3><span class="acc-group-total">' + money(gv.gross) + "</span></div>" +
           '<div class="acc-cards">' +
             gv.per.filter((pg) => pg.gross > 0).map((pg) =>
               '<div class="acc-card computed">' +
-                '<div class="acc-head"><b>' + escapeHtml(pg.grant.name) + " (vested net)</b><span class=\"acc-val\">" + money(pg.net) + "</span></div>" +
-                '<p class="hint">Gross ' + money(pg.gross) + " · tax " + money(pg.tax) + ". " +
+                '<div class="acc-head"><b>' + escapeHtml(pg.grant.name) + " (vested)</b><span class=\"acc-val\">" + money(pg.gross) + "</span></div>" +
+                '<p class="hint">Before tax. Tax if sold now ' + money(pg.tax) + " · net " + money(pg.net) + ". " +
                 (pg.grant.vestedShares || 0).toLocaleString() + " vested shares @ " + (pg.grant.currency === "ILS" ? "₪" : "$") + pg.grant.sharePrice + ". " +
                 "Edit on the <b>Income</b> page; future vests added automatically.</p>" +
               "</div>").join("") +
@@ -1328,7 +1328,7 @@
       let head = "<thead><tr><th>Year</th><th>Age (at year-end)</th><th>Phase</th><th>Salary+extra</th><th>" + (hasOldAge ? "Pension+BL net" : "Pension net") + "</th><th>Withdrawn</th><th>Spend" + (hasMortgage ? "+mortg." : "") + "</th>" +
         groups.map((g) => "<th>" + escapeHtml(shortName(g.name)) + "</th>").join("") +
         (hasRE ? "<th>RE equity</th>" : "") +
-        "<th>Total</th><th>Liquid</th></tr></thead>";
+        "<th>Total assets</th><th>Liquid (after tax)</th></tr></thead>";
       let body = "<tbody>" + p.rows.map((r) => {
         const cls = r.age === Math.round(st.profile.fireAge) ? ' class="fire-row"' : (p.depletionAge && r.age === p.depletionAge ? ' class="dep-row"' : "");
         const aEnd = ageAtYearEnd(st, r.year);
@@ -1348,13 +1348,13 @@
       const p = FIRE.engine.project(st);
       const groups = p.groupsMeta;
       const gVal = (r, g) => g.ids.reduce((s, id) => s + (r.perAccount[id] || 0), 0);
-      const cols = ["year", "age_at_year_end", "phase", "salary_extra", "pension_net", "old_age", "rent", "mortgage_pay", "withdrawn_net", "withdrawn_tax", "spend"].concat(groups.map((g) => g.name)).concat(["re_equity", "total", "liquid", "pension_pot"]);
+      const cols = ["year", "age_at_year_end", "phase", "salary_extra", "pension_net", "old_age", "rent", "mortgage_pay", "withdrawn_net", "withdrawn_tax", "spend"].concat(groups.map((g) => g.name)).concat(["re_equity", "total", "liquid_after_tax", "liquid_tax", "pension_pot"]);
       const lines = [cols.join(",")];
       p.rows.forEach((r) => {
         const aEnd = ageAtYearEnd(st, r.year);
         const row = [r.year, aEnd != null ? aEnd.toFixed(2) : r.age, r.working ? "work" : "retire", Math.round(r.salary + r.extra), Math.round(r.pensionNet), Math.round(r.oldAge), Math.round(r.rentIncome), Math.round(r.mortgagePay), Math.round(r.withdrawalNet), Math.round(r.withdrawalTax), Math.round(r.spend)]
           .concat(groups.map((g) => Math.round(gVal(r, g))))
-          .concat([Math.round(r.reEquity), Math.round(r.total), Math.round(r.liquid), Math.round(r.pension)]);
+          .concat([Math.round(r.reEquity), Math.round(r.total), Math.round(r.liquid), Math.round(r.liquidTax), Math.round(r.pension)]);
         lines.push(row.join(","));
       });
       const blob = new Blob([lines.join("\n")], { type: "text/csv" });
@@ -2309,14 +2309,14 @@ mount(el) {
           "<tr><td>4.0%</td><td>" + money(t.target4) + "</td><td>25×</td></tr>" +
           "<tr><td>3.5%</td><td>" + money(t.target35) + "</td><td>29×</td></tr>" +
           "<tr><td>3.0%</td><td>" + money(t.target3) + "</td><td>33×</td></tr></table>" +
-          '<p class="hint">Flipped around: at <b>' + t.swr + "%</b>, your current net worth of <b>" + money(p.snapshot.total) + "</b> could sustain ≈ <b>" + money(p.snapshot.total * (t.swr / 100) / 12) + "/mo</b> forever (≈ " + money(p.snapshot.nonPension * (t.swr / 100) / 12) + "/mo from non-pension assets alone).</p>";
+          '<p class="hint">Flipped around: at <b>' + t.swr + "%</b>, your current liquid assets of <b>" + money(p.snapshot.liquid) + "</b> (after tax, excl. pension) could sustain ≈ <b>" + money(p.snapshot.liquid * (t.swr / 100) / 12) + "/mo</b> forever (≈ " + money(p.snapshot.total * (t.swr / 100) / 12) + "/mo on total assets of " + money(p.snapshot.total) + ", before tax).</p>";
       }
       const cov = el.querySelector("#fire-cover");
       if (cov) {
         const fr = p.fireRow;
-        const coverage = fr && t.target ? (fr.nonPension / t.target) * 100 : 0;
+        const coverage = fr && t.target ? (fr.liquid / t.target) * 100 : 0;
         cov.innerHTML =
-          "<p>Retiring in <b>" + eventLabel(st, st.profile.fireAge) + "</b>, projected non-pension assets are <b>" + money(fr ? fr.nonPension : 0) + "</b> — <b>" + coverage.toFixed(0) + "%</b> of the " + money(t.target) + " target.</p>" +
+          "<p>Retiring in <b>" + eventLabel(st, st.profile.fireAge) + "</b>, projected liquid assets (after tax, excl. pension) are <b>" + money(fr ? fr.liquid : 0) + "</b> — <b>" + coverage.toFixed(0) + "%</b> of the " + money(t.target) + " target.</p>" +
           '<div class="bar-track"><div class="bar-fill ' + (coverage >= 100 ? "ok" : "warn") + '" style="width:' + Math.min(100, coverage) + '%"></div></div>' +
           '<p id="fire-earliest" class="hint">Computing earliest retirement age…</p>';
       }
@@ -2368,7 +2368,7 @@ mount(el) {
       // Scenario projection blocks (collapsed unless opened).
       this.renderScenarioBlock("coast", el);
       this.renderScenarioBlock("barista", el);
-      // Sensitivity: years until non-pension assets reach the fixed-spend target.
+      // Sensitivity: years until after-tax liquid assets reach the fixed-spend target.
       const sens = el.querySelector("#fire-sens");
       if (sens) {
         const base = FIRE.state.clone(st);
@@ -2433,14 +2433,14 @@ mount(el) {
           (kind === "coast"
             ? " — stop saving from " + eventLabel(st, age) + ", retire " + eventLabel(st, st.profile.fireAge) + "."
             : " — full-time until " + eventLabel(st, age) + ", then " + money(bcfg.monthly || 0) + "/mo part-time until age " + (bcfg.untilAge || age) + ".") +
-          " Final net worth <b>" + money(p.endNetWorth) + "</b> vs baseline " + money(pBase.endNetWorth) +
+          " Final total assets <b>" + money(p.endNetWorth) + "</b> vs baseline " + money(pBase.endNetWorth) +
           " (<b>" + (p.endNetWorth - pBase.endNetWorth >= 0 ? "+" : "") + money(p.endNetWorth - pBase.endNetWorth) + "</b>)." +
         "</div>" +
         '<div class="grid-2" style="margin-top:12px">' +
           '<div><h3>All entities over time (stacked)</h3>' +
             '<div class="toolbar" style="margin-bottom:6px"><label class="switch"><input type="checkbox" data-scnpension="' + kind + '"' + (this.scnShowPension[kind] !== false ? " checked" : "") + "> Include pension</label></div>" +
             '<canvas class="fire-scn-stack" height="260"></canvas></div>' +
-          '<div><h3>Net worth vs baseline</h3><canvas class="fire-scn-chart" height="260"></canvas></div>' +
+          '<div><h3>Total assets vs baseline</h3><canvas class="fire-scn-chart" height="260"></canvas></div>' +
         "</div>" +
         '<div class="table-wrap tall" style="max-height:340px;margin-top:12px"><table class="grid tiny fire-scn-table"></table></div>' +
         (kind === "coast" ? '<p class="hint">During "coast" years income is assumed to exactly cover spending — nothing is saved, nothing is withdrawn (that\'s the definition of coasting).</p>' : "");
@@ -2470,9 +2470,9 @@ mount(el) {
       C.line(body.querySelector(".fire-scn-chart"), {
         labels: p.rows.map((r) => r.year),
         series: [
-          { name: "Baseline total", data: pBase.rows.map((r) => r.total), color: "#bab0ac" },
-          { name: (kind === "coast" ? "Coast" : "Barista") + " total", data: p.rows.map((r) => r.total), color: "#2f7ed8" },
-          { name: (kind === "coast" ? "Coast" : "Barista") + " liquid", data: p.rows.map((r) => r.liquid), color: "#59a14f" },
+          { name: "Baseline total assets", data: pBase.rows.map((r) => r.total), color: "#bab0ac" },
+          { name: (kind === "coast" ? "Coast" : "Barista") + " total assets", data: p.rows.map((r) => r.total), color: "#2f7ed8" },
+          { name: (kind === "coast" ? "Coast" : "Barista") + " liquid (after tax)", data: p.rows.map((r) => r.liquid), color: "#59a14f" },
         ],
       });
 
@@ -2480,7 +2480,7 @@ mount(el) {
       const coastFrom = kind === "coast" ? age : null;
       let head = "<thead><tr><th>Year</th><th>Age</th><th>Phase</th><th>Income</th><th>Spend</th><th>Withdrawn</th>" +
         groups.map((g) => "<th>" + escapeHtml(shortName(g.name)) + "</th>").join("") +
-        "<th>Total</th><th>Liquid</th></tr></thead>";
+        "<th>Total assets</th><th>Liquid (after tax)</th></tr></thead>";
       let bodyRows = "<tbody>" + p.rows.map((r) => {
         const isRet = r.age === Math.round(t.profile.fireAge);
         const isStart = coastFrom != null && r.age === coastFrom;
@@ -2512,7 +2512,7 @@ mount(el) {
         tt.accounts.forEach((a) => { if (a.kind === "taxable" || a.kind === "money_market") a.expectedReturn = r; });
         (tt.income.grants || []).forEach((g) => { g.expectedGrowthPct = r + 1; });
         const pp = FIRE.engine.project(tt);
-        const hit = pp.rows.find((row) => row.nonPension >= pp.targets.target);
+        const hit = pp.rows.find((row) => row.liquid >= pp.targets.target);
         return hit ? hit.age - pp.A0 : null;
       });
       C.bar(sens, {

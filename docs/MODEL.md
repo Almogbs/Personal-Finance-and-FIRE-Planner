@@ -50,16 +50,38 @@ Israeli tax is defined on annual totals, so some things cannot be computed a mon
   one in November — the brackets settle per calendar year even though the cash moves monthly.
 - **The lump-sum היוון exempt capital** (`pct × ceiling × 180`) is a one-off statutory calculation.
 
-### Cash flow within a year
+### Cash flow within a year — start-of-month timing
 
-Each month's income minus outgoings lands in a **cash float**:
+Every cash flow of a month happens on its **first day**, and the month's growth is applied **after**
+them:
 
-- a **negative** float is funded immediately by selling, because that is a real cash need in that month;
-- a **positive** float accumulates and is invested at **year end** via the allocation rules, which keeps
-  the established convention that a year's surplus starts compounding the following year.
+1. contributions and grant vests are deposited;
+2. the month's income (salary, extra, rent, net pension, old-age pension) minus spending and mortgage
+   payments is settled;
+3. a **surplus** is invested that same month via the allocation rules (fixed rules are ₪/month);
+4. a **deficit** first reverses **this calendar year's own surplus deposits** (at cost basis, untaxed —
+   as if that surplus had been kept as cash), and only the remainder is sold from the withdrawal order;
+5. then every account grows by one month's return (and pays a twelfth of its annual balance fee).
 
-This is why monthly stepping does **not** cause spurious selling: a surplus month builds the float that
-a later deficit month spends, so no year that was net-positive overall sells anything.
+So a deposit earns the return of the month it is made, and a withdrawal does not. Step 4 is why monthly
+stepping does **not** cause spurious selling: no year that is net-positive overall sells anything.
+
+## Valuation — Total assets vs Liquid
+
+Two headline figures are reported for today (`snapshot()`) and for every projection year (`rows`):
+
+- **Total assets** (`total`) — every account **before tax** (including pension and grants at their gross
+  value) plus real-estate equity. `nonPension`, `pension` and `perAccount` are before tax too.
+- **Liquid** (`liquid`) — **after tax**: what selling every non-pension financial account at that point
+  would put in your hand. Pension and real estate are excluded (pension is excluded even after its
+  access age). The tax taken off is reported as `liquidTax`:
+  - cash and study fund: no tax;
+  - money market, taxable, custom: `max(0, balance − costBasis) × capGainsRate`;
+  - grants: the Section-102 sale tax — the ordinary slice at your marginal rate, stacked on the year's
+    other ordinary income (and on earlier grants), plus capital gains on the appreciation.
+
+`drawable` keeps the old meaning of "accounts that can fund spending this year". FIRE coverage, the
+withdrawal rate at retirement and the "could sustain X/mo" figure all use the after-tax Liquid.
 
 ## Accounts
 
@@ -79,33 +101,34 @@ Each account has:
 | `capGainsRate` | capital-gains tax % applied to the **gain** when sold |
 | `costBasis` / `gainPct` | buying value used to size the taxable gain. Taxable accounts can set **gain vs buy value %** instead of an absolute basis: `basis = balance / (1 + gainPct/100)` (a negative `gainPct` models a position at a loss → no gain → no CG tax) |
 
-### Yearly update order
+### Monthly update order
 
-For each age:
+Each month (see *Cash flow within a year* for the exact order):
 
-1. **Growth:** `balance *= (1 + expectedReturn/100)`.
-2. **Contributions** (working years only): `balance += monthlyContribution*12*(1+contributionGrowthPct/100)^k`, where `k` is years since start.
-3. **RSU vests** (see below) are added to the RSU account.
-4. **Cash flow:** compute take-home income minus spending.
+1. **Contributions** (working months only): `balance += monthlyContribution*(1+contributionGrowthPct/100)^k`, where `k` is years since start.
+2. **RSU vests** (see below) are added to the grant account.
+3. **Cash flow:** compute take-home income minus spending.
    - **Surplus** → distributed via **allocation rules** (see below); the remainder goes to the
      **default account** (`income.defaultAccountId`, typically your checking account).
-   - **Shortfall** → withdrawn from liquid accounts in a **configurable order**
+   - **Shortfall** → first reverses this year's own surplus deposits, then is withdrawn from liquid
+     accounts in a **configurable order**
      (`assumptions.withdrawalOrder`, default
      `cash → money_market → taxable → rsu → study_fund → custom → pension`, editable on the
      Market & Assumptions page), skipping any account still under its `accessAge`.
    - If a shortfall cannot be covered, the first such age is recorded as the **depletion age**.
+4. **Growth:** `balance *= (1 + expectedReturn/100)^(1/12)`, after the month's flows.
 
 > Employer pension and study-fund deposits are modeled **only** as an account's `monthlyContribution`
-> (step 2) — there is no separate income field for them, so they are never double-counted. The salary
+> (step 1) — there is no separate income field for them, so they are never double-counted. The salary
 > you enter is **net take-home**.
 
 ### Surplus allocation
 
-`income.allocations` is a list of rules, each routing part of the annual surplus to an account:
+`income.allocations` is a list of rules, each routing part of the month's surplus to an account:
 
 ```
 mode = 'percent' → amount = surplus * value/100
-mode = 'amount'  → amount = value * 12        (value is ₪/month)
+mode = 'amount'  → amount = value             (value is ₪/month)
 ```
 
 Rules are applied in order, each capped by the remaining surplus. Whatever is left after all rules
@@ -148,9 +171,9 @@ into higher brackets, exactly as a tax return would.
   grant's own expected-return assumption: `sharePrice * (1 + expectedGrowthPct/100)^k`. Their **gross**
   value is added to the grant account, which then compounds at that return (models "hold the shares").
   New vesting is bounded by each grant's own `[startAge, stopAge)` window (see the grants section below).
-- **Reported balances are net of the deferred tax.** Net worth, liquid, and the FIRE-eligible pot all
-  subtract the tax that would fall due if the account were sold in that year, so the plan is never
-  flattered by money owed to the tax authority. Each projection row also carries `rsuDeferredTax`.
+- **Balances are reported before tax**, like every other account. The deferred Section-102 tax only
+  reduces the after-tax **Liquid** figure (see *Valuation* below). Each projection row also carries
+  `rsuDeferredTax`, the grant part of `liquidTax`.
 - Because the tax is no longer taken years early, the amount that would have gone to tax at vest keeps
   compounding until the sale — which is what actually happens when you hold Section-102 shares.
 
@@ -297,7 +320,7 @@ and remaining term, which equals the classic constant payment for fixed unlinked
 rate changes/linkage correctly) or `equal` (קרן שווה — equal principal, declining payments). The
 UI checks the Bank-of-Israel composition rule (≥⅓ fixed-rate, prime ≤⅔). Per projection year:
 
-- **Equity** (Σ value − Σ remaining principal) is added to **net worth** — never to liquid or
+- **Equity** (Σ value − Σ remaining principal) is added to **total assets** — never to liquid or
   FIRE-eligible assets (the house can't fund spending in the model).
 - **Rent** adds to income; **mortgage payments** add to outgoings
   (`net = income − spend − mortgagePay`).

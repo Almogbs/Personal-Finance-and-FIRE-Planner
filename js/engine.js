@@ -8,8 +8,12 @@
  *  - Each account grows by its own expected annual return.
  *  - Employer/auto contributions are deposited while "working" (age < fireAge).
  *  - Net salary is take-home; extra income streams apply within age windows.
- *  - RSU: already-vested shares are a virtual equity account; future vests are
- *    added (after modeled Section-102 tax) while working and below vestUntilAge.
+ *  - RSU: already-vested shares are a virtual equity account held at gross
+ *    value; future vests are added while working and below vestUntilAge.
+ *    Section-102 tax is paid on sale.
+ *  - Cash flows happen at the start of each month, then the month's growth.
+ *  - Balances are reported before tax (`total`); `liquid` is the after-tax
+ *    value of selling every non-pension account at that point.
  *  - Spending: sum of active categories (each with own growth/age window),
  *    unless a step override applies for that age.
  *  - Surplus is reinvested into a chosen sink; shortfalls are withdrawn from
@@ -122,28 +126,41 @@
   /* ---- Current-state snapshot (t0), for the dashboard --------------------- */
   function snapshot(state) {
     const usdIls = state.market.usdIls;
-    const accounts = state.accounts.map((a) => ({
-      id: a.id, name: a.name, kind: a.kind, currency: a.currency,
-      valueILS: toILS(a, usdIls), liquid: a.liquid, includeInFire: a.includeInFire,
-      accessAge: a.accessAge || 0,
-    }));
+    const accounts = state.accounts.map((a) => {
+      const valueILS = toILS(a, usdIls);
+      const basisOwn = FIRE.state.costBasisOf(a);
+      const basis = a.currency === "USD" ? basisOwn * usdIls : basisOwn;
+      return {
+        id: a.id, name: a.name, kind: a.kind, currency: a.currency,
+        valueILS, liquid: a.liquid, includeInFire: a.includeInFire,
+        accessAge: a.accessAge || 0,
+        saleTax: saleTaxOf(a.kind, valueILS, basis, a.capGainsRate || 0),
+      };
+    });
 
-    // Each grant is a virtual, computed equity account. Its Section-102 tax is
-    // only due on sale, so "net" here means "what you'd keep selling today" —
-    // the ordinary slice priced at your real marginal rate on top of this
-    // year's salary, not at a flat guess.
+    // Each grant is a virtual, computed equity account, shown at its GROSS
+    // value like every other balance. Its Section-102 tax (the ordinary slice
+    // at your real marginal rate on top of this year's salary, plus capital
+    // gains on the appreciation) only reduces the after-tax Liquid figure.
     const gv = FIRE.state.grantsVested(state, grantOrdinaryTaxFor(state));
     gv.per.forEach((pg) => {
-      if (pg.net > 0 || pg.gross > 0) {
-        accounts.push({ id: "grant-" + pg.grant.id, name: pg.grant.name + " (vested net)", kind: "rsu", currency: pg.grant.currency, valueILS: pg.net, liquid: true, includeInFire: true, accessAge: 0 });
+      if (pg.gross > 0) {
+        accounts.push({ id: "grant-" + pg.grant.id, name: pg.grant.name + " (vested)", kind: "rsu", currency: pg.grant.currency, valueILS: pg.gross, liquid: true, includeInFire: true, accessAge: 0, saleTax: pg.tax });
       }
     });
 
-    let total = 0, liquid = 0, nonPension = 0, pension = 0;
+    // total/nonPension/pension are BEFORE tax. `liquid` is AFTER tax: what
+    // selling every non-pension account today would put in your hand.
+    let total = 0, nonPension = 0, pension = 0, liquid = 0, liquidTax = 0, drawable = 0;
     accounts.forEach((a) => {
       total += a.valueILS;
-      if (a.kind === "pension") pension += a.valueILS; else nonPension += a.valueILS;
-      if (a.liquid) liquid += a.valueILS;
+      if (a.kind === "pension") pension += a.valueILS;
+      else {
+        nonPension += a.valueILS;
+        liquid += a.valueILS - a.saleTax;
+        liquidTax += a.saleTax;
+      }
+      if (a.liquid) drawable += a.valueILS;
     });
 
     // Real-estate equity (value − remaining mortgage principal) counts in
@@ -156,7 +173,14 @@
     }
     total += reValue - reDebt;
 
-    return { usdIls, accounts, total, liquid, nonPension, pension, reValue, reDebt, reEquity: reValue - reDebt, grants: gv };
+    return { usdIls, accounts, total, liquid, liquidTax, drawable, nonPension, pension, reValue, reDebt, reEquity: reValue - reDebt, grants: gv };
+  }
+
+  // Capital-gains tax due on selling a whole (non-grant) account. Cash and the
+  // study fund are sold tax-free; pension is never part of the liquid figure.
+  function saleTaxOf(kind, value, basis, cgPct) {
+    if (kind === "pension" || kind === "cash" || kind === "study_fund") return 0;
+    return Math.max(0, value - (basis || 0)) * ((cgPct || 0) / 100);
   }
 
   /* ---- Spending helpers --------------------------------------------------- */
@@ -379,7 +403,7 @@
     (state.income.grants || []).forEach((g) => {
       const gnow = FIRE.state.grantNet(g, usdIls, FIRE.state.vestedSharesOf(state, g), g.sharePrice);
       const acc = {
-        id: "grant-" + g.id, name: g.name + " (net)", kind: "rsu", group: "RSU / equity",
+        id: "grant-" + g.id, name: g.name, kind: "rsu", group: "RSU / equity",
         ret: g.expectedGrowthPct || 0, contrib: 0, contribGrowth: 0,
         liquid: true, includeInFire: true, accessAge: 0, bal: gnow.gross,
         basis: gnow.ordinary, ord: gnow.ordinary, isGrant: true,
@@ -432,17 +456,42 @@
       acc.ord += Math.max(0, ordinary || 0);
       acc.basis = acc.ord;
     }
-    function distributeSurplus(surplus) {
+    // Invest one month's surplus at the start of that month. Fixed allocation
+    // rules are ₪/mo. Each deposit is recorded in `ledger` (this calendar
+    // year's surplus deposits per account) so a later deficit in the same year
+    // can pull that money back before anything is sold.
+    function distributeSurplus(surplus, ledger) {
       let remaining = surplus;
+      const put = (acc, amt) => {
+        if (!acc || !(amt > 0)) return;
+        deposit(acc, amt);
+        if (ledger) ledger.set(acc, (ledger.get(acc) || 0) + amt);
+      };
       allocations.forEach((al) => {
         const target = accs.find((a) => a.id === al.accountId);
         if (!target || remaining <= 0) return;
-        let amt = al.mode === "percent" ? surplus * (al.value / 100) : al.value * 12; // ₪/mo → /yr
+        let amt = al.mode === "percent" ? surplus * (al.value / 100) : al.value; // ₪/mo
         amt = Math.max(0, Math.min(amt, remaining));
-        deposit(target, amt);
+        put(target, amt);
         remaining -= amt;
       });
-      deposit(defaultAcc, remaining); // "the rest" → your default account
+      put(defaultAcc, remaining); // "the rest" → your default account
+    }
+    // Take back up to `need` of this year's own surplus deposits, at cost
+    // basis and untaxed — as if that surplus had simply been kept as cash.
+    // Most recent deposits are reversed first. Returns what is still needed.
+    function pullBackSurplus(need, ledger) {
+      const entries = Array.from(ledger.entries()).reverse();
+      for (const [acc, amt] of entries) {
+        if (need <= 1e-6) break;
+        const take = Math.min(need, amt, Math.max(0, acc.bal));
+        if (!(take > 0)) continue;
+        acc.bal -= take;
+        acc.basis = Math.max(0, acc.basis - take);
+        ledger.set(acc, amt - take);
+        need -= take;
+      }
+      return Math.max(0, need);
     }
 
     // ---- Section-102 sale pricing for grant accounts ----------------------
@@ -638,16 +687,17 @@
         withdrawalNet: 0, withdrawalGross: 0, withdrawalTax: 0, sources: {},
         // year-to-date tax state
         ordStack: 0, pensionGrossYTD: 0, pensionTaxYTD: 0,
+        // this year's surplus deposits per account (for same-year pull-back)
+        surplusDeposits: new Map(),
       };
     }
 
     const rows = [];
     const monthly = [];
     let depletionAge = null, depletionExactAge = null;
-    // Cash float: monthly net flows land here. A negative float is funded
-    // immediately by selling (that is a real cash need); a positive float is
-    // invested at year end, which keeps the existing convention that a year's
-    // surplus starts compounding the following year.
+    // Cash float kept for the monthly series' `buffer` field. With surplus now
+    // invested in the month it arises and deficits funded immediately, it is
+    // always 0 at month end.
     let buffer = 0;
     let Y = null;
 
@@ -676,14 +726,10 @@
       const coasting = coastFrom != null && working && exAge >= coastFrom;
       if (working) Y.workingMonths++;
 
-      // 1) Growth for one month, plus a twelfth of the annual balance fee.
-      accs.forEach((a) => {
-        const ret = opts && opts.returnOverride ? Math.max(-95, opts.returnOverride(a, k)) : a.ret;
-        a.bal *= 1 + monthlyRate(ret);
-        if ((a.kind === "pension" || a.kind === "study_fund") && a.feeBalance) {
-          a.bal *= Math.pow(1 - a.feeBalance / 100, 1 / 12);
-        }
-      });
+      // Every cash flow of the month (contributions, vests, income, spending,
+      // surplus deposits, withdrawals) happens on its FIRST day; the month's
+      // growth is applied last (step 7), so money deposited this month earns
+      // this month's return and money withdrawn does not.
 
       // 2) Auto/employer contributions — one month's worth, deposited monthly
       //    so they start compounding in the month they are made.
@@ -834,17 +880,31 @@
       let netM = incomeM - spendM - mortgageM;
       if (coasting) netM = 0; // coast: income is assumed to exactly cover outgoings
       let wdNetBefore = Y.withdrawalNet;
+      buffer = 0;
       if (!coasting) {
-        buffer += netM;
-        if (buffer < -1e-6) {
-          const unmet = withdrawNet(-buffer, exAge, Y, inflFactor);
-          buffer = -unmet;
-          if (unmet > 0.5) {
-            if (depletionAge == null) { depletionAge = age; depletionExactAge = exAge; }
-            buffer = 0; // the shortfall is unfunded; don't carry it forward
-          }
+        if (netM > 1e-6) {
+          // Surplus is invested at the start of the month it arises.
+          distributeSurplus(netM, Y.surplusDeposits);
+        } else if (netM < -1e-6) {
+          // A deficit first reverses this year's own surplus deposits (so a
+          // year that is net-positive overall never sells anything), then
+          // sells from the withdrawal order.
+          const left = pullBackSurplus(-netM, Y.surplusDeposits);
+          const unmet = left > 0 ? withdrawNet(left, exAge, Y, inflFactor) : 0;
+          if (unmet > 0.5 && depletionAge == null) { depletionAge = age; depletionExactAge = exAge; }
+          // An unfunded shortfall is not carried forward.
         }
       }
+
+      // 7) Growth for the month, plus a twelfth of the annual balance fee —
+      //    applied after the month's flows (start-of-month timing).
+      accs.forEach((a) => {
+        const ret = opts && opts.returnOverride ? Math.max(-95, opts.returnOverride(a, k)) : a.ret;
+        a.bal *= 1 + monthlyRate(ret);
+        if ((a.kind === "pension" || a.kind === "study_fund") && a.feeBalance) {
+          a.bal *= Math.pow(1 - a.feeBalance / 100, 1 / 12);
+        }
+      });
 
       // Accumulate the calendar year's flows.
       Y.salary += salaryM; Y.extra += extraM; Y.spend += spendM;
@@ -866,33 +926,38 @@
         });
       }
 
-      // 7) Year end: invest the accumulated surplus, then snapshot and emit the
-      //    annual row. Investing at year end (rather than each month) keeps the
-      //    established convention that a year's surplus starts compounding the
-      //    following year.
+      // 8) Year end: snapshot balances (after December's growth) and emit the
+      //    annual row.
       if (isYearEnd) {
-        if (!coasting && buffer > 1e-6) { distributeSurplus(buffer); buffer = 0; }
 
         const perAccount = {};
-        let total = 0, liquid = 0, nonPension = 0, pension = 0, fireEligible = 0;
+        let total = 0, liquid = 0, liquidTax = 0, drawable = 0, nonPension = 0, pension = 0, fireEligible = 0;
         let rsuDeferredTax = 0, reportStack = Y.ordStack;
         accs.forEach((a) => {
-          let v = Math.max(0, a.bal);
-          if (a.isGrant && v > 0) {
-            // Report grant accounts net of the Section-102 tax that would fall
-            // due on sale, so net worth is not flattered by money that is owed.
-            const t = grantSaleTax(a, v, reportStack, inflFactor);
-            reportStack += a.ord;
-            rsuDeferredTax += t;
-            v = Math.max(0, v - t);
+          const v = Math.max(0, a.bal);
+          // Balances are reported BEFORE tax. The after-tax `liquid` figure is
+          // what selling every non-pension account this year would deliver:
+          // grants pay Section-102 (ordinary slice stacked on the year's other
+          // income, then capital gains); other accounts pay capital gains on
+          // the gain above cost basis.
+          let saleTax = 0;
+          if (a.kind !== "pension" && v > 0) {
+            if (a.isGrant) {
+              saleTax = grantSaleTax(a, v, reportStack, inflFactor);
+              reportStack += a.ord;
+              rsuDeferredTax += saleTax;
+            } else {
+              saleTax = saleTaxOf(a.kind, v, a.basis, a.cg);
+            }
           }
           perAccount[a.id] = v;
           total += v;
-          if (a.kind === "pension") pension += v; else nonPension += v;
-          const drawable = a.kind === "pension"
+          if (a.kind === "pension") pension += v;
+          else { nonPension += v; liquid += v - saleTax; liquidTax += saleTax; }
+          const canDraw = a.kind === "pension"
             ? (pcfg.mode === "lump" && exAge >= (a.accessAge || state.profile.pensionAccessAge))
             : (a.liquid && (!a.accessAge || exAge >= a.accessAge));
-          if (drawable) liquid += v;
+          if (canDraw) drawable += v;
           if (a.includeInFire) fireEligible += v;
         });
 
@@ -913,7 +978,7 @@
           reValue, reDebt, reEquity, rentIncome: Y.rentIncome, mortgagePay: Y.mortgagePay,
           withdrawalNet: Y.withdrawalNet, withdrawalGross: Y.withdrawalGross,
           withdrawalTax: Y.withdrawalTax, sources: Y.sources, rsuDeferredTax,
-          perAccount, total, liquid, nonPension, pension, fireEligible,
+          perAccount, total, liquid, liquidTax, drawable, nonPension, pension, fireEligible,
           realFactor: Math.pow(1 + infl, Y.k),
         });
       }
