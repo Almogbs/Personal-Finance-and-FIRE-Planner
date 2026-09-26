@@ -3,6 +3,28 @@
 All notable changes are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## 1.33.0
+
+Tax-model corrections.
+
+- **2026 income-tax brackets.** The 2026 budget widened the 20% band to ₪228,000/yr and the 31% band to
+  ₪301,200/yr (35% now ends at ₪560,280). The engine still used the 2025 table, overstating tax by up
+  to ≈ ₪420/mo on salaries above ₪16,150/mo — and on RSU sales and pension income.
+- **Credit points in retirement.** Pension annuity tax now subtracts your credit points (2.25 standard),
+  accrued for the months with no salary. It used to ignore them, overstating tax by ≈ ₪545/mo.
+- **Capital gains on the real gain.** Shekel-denominated accounts now index their cost basis to CPI
+  monthly, so only growth above inflation is taxed (USD accounts stay nominal under the constant-FX
+  model). A sale at a real loss is tax-free, and basis now leaves pro-rata with the units sold.
+- **35% credit on your own pension deposit** (section 45A, up to 7% of salary, salary capped at an
+  editable ceiling, default ₪9,700/mo) is included in the gross-mode payslip and shown on the Income page.
+- **Monthly pension exemption.** The entitling-pension exemption is granted only for months the annuity
+  is paid and you are past the exemption age, so a partial first year (or the year you turn 67) no
+  longer gets a full year's exemption.
+- **Raises are taxed progressively.** Gross mode recomputes the payslip each projection year from the
+  grown gross, with brackets, credits, NI thresholds and ceilings indexed to inflation. Previously
+  take-home grew one-for-one with gross.
+- Tests for each rule (`node --test tests/`).
+
 ## 1.32.0
 
 - **All balances are shown before tax, RSU grants included.** Grants were previously reported net of

@@ -25,11 +25,12 @@
 
   const WITHDRAW_PRIORITY = ["cash", "money_market", "taxable", "rsu", "study_fund", "custom", "pension"];
 
-  // Israeli individual income-tax brackets (annual, nominal ₪, ~2026).
-  // 47% top rate + 3% surtax above the last threshold ≈ 50%.
+  // Israeli individual income-tax brackets (annual, nominal ₪, 2026 — the
+  // 2026 budget widened the 20% and 31% brackets retroactively to 1 January).
+  // 47% top rate + 3% surtax above the last threshold = 50%.
   const TAX_BRACKETS = [
-    [84120, 0.10], [120720, 0.14], [193800, 0.20], [269280, 0.31],
-    [558960, 0.35], [721560, 0.47], [Infinity, 0.50],
+    [84120, 0.10], [120720, 0.14], [228000, 0.20], [301200, 0.31],
+    [560280, 0.35], [721560, 0.47], [Infinity, 0.50],
   ];
   // Progressive tax on annual taxable income. `factor` scales the bracket
   // thresholds to the projection year so nominal growth doesn't inflate rates.
@@ -84,20 +85,38 @@
     return acc.currency === "USD" ? acc.balance * usdIls : acc.balance;
   }
 
-  /* ---- Israeli payroll: gross → net + pension/study-fund deposits --------- */
-  function computePayroll(state) {
+  /* ---- Israeli payroll: gross → net + pension/study-fund deposits ---------
+   * opts.growth — multiplies the salary, cash extras and imputations (a raise).
+   * opts.factor — the year's inflation factor: scales tax brackets, the
+   *   credit-point value, NI thresholds and every ₪ ceiling, so a real raise
+   *   is taxed progressively while pure inflation is not.
+   * Both default to 1 (today's payslip).
+   *-----------------------------------------------------------------------*/
+  function computePayroll(state, opts) {
     const s = state.income;
     const pr = state.assumptions.payroll || {};
-    const grossCash = (s.grossMonthly || 0) + (s.taxableExtrasMonthly || 0); // paid in cash
-    const imputations = s.taxableImputationsMonthly || 0; // זקיפות: taxed, not cash
+    const g = (opts && opts.growth) || 1;
+    const f = (opts && opts.factor) || 1;
+    const scaleCeil = (v) => (v > 0 ? v * f : v);
+    const grossBase = (s.grossMonthly || 0) * g;
+    const grossCash = grossBase + (s.taxableExtrasMonthly || 0) * g; // paid in cash
+    const imputations = (s.taxableImputationsMonthly || 0) * g; // זקיפות: taxed, not cash
     const taxableBase = grossCash + imputations;
-    const pensionable = pr.pensionCeilingMonthly > 0 ? Math.min(s.grossMonthly || 0, pr.pensionCeilingMonthly) : (s.grossMonthly || 0);
-    const khBase = pr.khCeilingMonthly > 0 ? Math.min(s.grossMonthly || 0, pr.khCeilingMonthly) : (s.grossMonthly || 0);
+    const pensionCeil = scaleCeil(pr.pensionCeilingMonthly), khCeil = scaleCeil(pr.khCeilingMonthly);
+    const pensionable = pensionCeil > 0 ? Math.min(grossBase, pensionCeil) : grossBase;
+    const khBase = khCeil > 0 ? Math.min(grossBase, khCeil) : grossBase;
     const empPension = (pr.pensionEmployeePct || 0) / 100 * pensionable;
     const empKH = (pr.khEmployeePct || 0) / 100 * khBase;
-    const incomeTax = Math.max(0, incomeTaxAnnual(taxableBase * 12, 1) / 12 - (s.creditPoints || 0) * (pr.creditPointValue || 0));
-    const ceil = pr.niCeilingMonthly != null ? pr.niCeilingMonthly : Infinity;
-    const thr = pr.niThresholdMonthly || 0;
+    // Section 45A: 35% credit on the employee's own pension deposit, counted
+    // up to 7% of the insured salary (salary capped at the credit ceiling).
+    const creditCeil = scaleCeil(pr.pensionCreditCeilingMonthly != null ? pr.pensionCreditCeilingMonthly : 9700);
+    const creditBase = creditCeil > 0 ? Math.min(pensionable, creditCeil) : pensionable;
+    const pensionCredit = ((pr.pensionCreditPct != null ? pr.pensionCreditPct : 35) / 100) *
+      Math.min(empPension, ((pr.pensionCreditMaxRatePct != null ? pr.pensionCreditMaxRatePct : 7) / 100) * creditBase);
+    const creditPointsValue = (s.creditPoints || 0) * (pr.creditPointValue || 0) * f;
+    const incomeTax = Math.max(0, incomeTaxAnnual(taxableBase * 12, f) / 12 - creditPointsValue - pensionCredit);
+    const ceil = pr.niCeilingMonthly != null ? pr.niCeilingMonthly * f : Infinity;
+    const thr = (pr.niThresholdMonthly || 0) * f;
     const capped = Math.min(taxableBase, ceil);
     const lower = Math.min(capped, thr);
     const upper = Math.max(0, capped - thr);
@@ -109,7 +128,7 @@
     const employerKH = (pr.khEmployerPct || 0) / 100 * khBase;
     const pensionDeposit = empPension + employerPension + severance;
     const khDeposit = empKH + employerKH;
-    return { grossCash, imputations, taxableBase, gross: grossCash, pensionable, khBase, incomeTax, niHealth, empPension, empKH, employerPension, severance, employerKH, net, pensionDeposit, khDeposit };
+    return { grossCash, imputations, taxableBase, gross: grossCash, pensionable, khBase, incomeTax, pensionCredit, niHealth, empPension, empKH, employerPension, severance, employerKH, net, pensionDeposit, khDeposit };
   }
 
   /* ---- Section-102 ordinary tax resolver for "sell today" views -----------
@@ -389,6 +408,11 @@
         liquid: !!a.liquid, includeInFire: a.includeInFire !== false,
         accessAge: a.accessAge || 0, bal: bal, basis: Math.min(basis, bal) || 0,
         cg: a.capGainsRate || 0, annuityGrossAnnual: null,
+        // Israeli CG tax is on the REAL gain: the inflationary part is exempt.
+        // For shekel assets the cost basis is indexed to CPI every month; for
+        // foreign-currency assets the inflationary amount follows the exchange
+        // rate, which this model holds constant, so their basis stays nominal.
+        indexBasis: a.kind !== "pension" && a.currency !== "USD" && (a.capGainsRate || 0) > 0,
         feeDeposit: a.feeDeposit || 0, feeBalance: a.feeBalance || 0,
       };
     });
@@ -525,10 +549,23 @@
     if (state.income.salaryMode === "gross") {
       payroll = computePayroll(state);
       netMonthly = payroll.net;
+      // Deposits come from each year's payslip (see payrollAt), not from a
+      // grown-once contribution.
       const pAcc = accs.find((a) => a.kind === "pension");
-      if (pAcc) { pAcc.contrib = payroll.pensionDeposit; pAcc.contribGrowth = state.income.salaryGrowthPct || 0; }
+      if (pAcc) pAcc.payrollDeposit = "pensionDeposit";
       const kAcc = accs.find((a) => a.kind === "study_fund");
-      if (kAcc) { kAcc.contrib = payroll.khDeposit; kAcc.contribGrowth = state.income.salaryGrowthPct || 0; }
+      if (kAcc) kAcc.payrollDeposit = "khDeposit";
+    }
+    // Gross mode: the payslip is recomputed each projection year from the
+    // grown gross salary, with brackets/credits/NI thresholds indexed to
+    // inflation — so a real raise is taxed at the rising marginal rate instead
+    // of growing take-home one-for-one. Net mode can only grow the take-home.
+    const salaryG = 1 + (state.income.salaryGrowthPct || 0) / 100;
+    const payrollCache = {};
+    function payrollAt(k) {
+      if (!payroll) return null;
+      if (!payrollCache[k]) payrollCache[k] = computePayroll(state, { growth: Math.pow(salaryG, k), factor: Math.pow(1 + infl, k) });
+      return payrollCache[k];
     }
 
     // Pension configuration (Israeli law-based, all editable).
@@ -566,8 +603,15 @@
       const exemptAnnual = eligible ? (exemptionPctAt(year) / 100) * (pcfg.ceiling * factor) * 12 : 0;
       return Math.max(0, grossAnnual - exemptAnnual);
     }
+    // Credit points still apply in retirement (2.25 standard, more for
+    // women/children): their monthly value, indexed to the year.
+    const creditPointsM = (state.income.creditPoints != null ? state.income.creditPoints : 2.25) *
+      (((state.assumptions.payroll || {}).creditPointValue) != null ? state.assumptions.payroll.creditPointValue : 242);
+    // Full-year steady-state tax on an annual pension, after credit points
+    // (used by the pension summary cards).
     function pensionTaxAnnual(grossAnnual, factor, atAge, year, useExemption) {
-      return incomeTaxAnnual(pensionTaxableAnnual(grossAnnual, factor, atAge, year, useExemption), factor);
+      const tax = incomeTaxAnnual(pensionTaxableAnnual(grossAnnual, factor, atAge, year, useExemption), factor);
+      return Math.max(0, tax - creditPointsM * 12 * (factor || 1));
     }
     const pensionConv = { potAtAccess: 0, grossAnnual: 0, annuitizedPot: 0, factor: 1, age: null, year: null };
     // Lump-mode bookkeeping across pension accounts: how much pot has been
@@ -663,8 +707,10 @@
           const deliverable = a.bal * (1 - effRate);
           const takeNet = Math.min(needNet, deliverable);
           const grossSale = effRate < 1 ? takeNet / (1 - effRate) : takeNet;
+          // Basis leaves pro-rata with the units sold (also correct when the
+          // indexed basis exceeds the balance, i.e. a real loss).
+          a.basis = Math.max(0, a.basis * (1 - Math.min(1, grossSale / a.bal)));
           a.bal -= grossSale;
-          a.basis = Math.max(0, a.basis - grossSale * (1 - gainFrac));
           needNet -= takeNet;
           Y.withdrawalNet += takeNet;
           Y.withdrawalGross += grossSale;
@@ -686,7 +732,7 @@
         rentIncome: 0, mortgagePay: 0,
         withdrawalNet: 0, withdrawalGross: 0, withdrawalTax: 0, sources: {},
         // year-to-date tax state
-        ordStack: 0, pensionGrossYTD: 0, pensionTaxYTD: 0,
+        ordStack: 0, pensionGrossYTD: 0, pensionTaxableYTD: 0, pensionCreditYTD: 0, pensionTaxYTD: 0,
         // this year's surplus deposits per account (for same-year pull-back)
         surplusDeposits: new Map(),
       };
@@ -735,7 +781,8 @@
       //    so they start compounding in the month they are made.
       if (working && !coasting) {
         accs.forEach((a) => {
-          if (a.contrib > 0) deposit(a, a.contrib * Math.pow(1 + a.contribGrowth / 100, k));
+          if (a.payrollDeposit) deposit(a, payrollAt(k)[a.payrollDeposit]);
+          else if (a.contrib > 0) deposit(a, a.contrib * Math.pow(1 + a.contribGrowth / 100, k));
         });
       }
 
@@ -771,7 +818,11 @@
       // 4) One month of take-home pay. `netMonthly` is already a monthly figure.
       const salaryM = (state.income.stopSalaryAtFire && !working)
         ? 0
-        : netMonthly * Math.pow(1 + state.income.salaryGrowthPct / 100, k);
+        : (payroll ? payrollAt(k).net : netMonthly * Math.pow(salaryG, k));
+      // The month's ordinary taxable salary, for Section-102 stacking. Gross
+      // mode knows the real taxable base; net mode only has take-home.
+      const salaryTaxableM = working
+        ? (payroll ? payrollAt(k).taxableBase : netMonthly * Math.pow(salaryG, k)) : 0;
 
       // 4a) Extra income streams inside their own age window. `endAge` keeps its
       //     inclusive-year meaning (< endAge+1) so stream durations are unchanged
@@ -820,7 +871,7 @@
             pensionConv.factor = inflFactor;
             pensionConv.age = age;
             pensionConv.year = year;
-            a.bal = 0; a.basis = 0; a.contrib = 0;
+            a.bal = 0; a.basis = 0; a.contrib = 0; a.payrollDeposit = null;
           }
           pensionGrossM += a.annuityGrossAnnual / 12;
         } else {
@@ -852,28 +903,37 @@
             pensionConv.factor = inflFactor;
             pensionConv.age = age;
             pensionConv.year = year;
-            a.bal = 0; a.basis = 0; a.contrib = 0;
+            a.bal = 0; a.basis = 0; a.contrib = 0; a.payrollDeposit = null;
           }
           if (a.annuityGrossAnnual != null) pensionGrossM += a.annuityGrossAnnual / 12;
         }
       });
 
-      // Tax the annuity on a year-to-date basis: one entitling-pension
-      // exemption per calendar year, shared across pots, charged as the
-      // month-on-month increment.
-      let pensionTaxM = 0;
+      // Tax the annuity on a year-to-date basis. The entitling-pension
+      // exemption is a MONTHLY allowance (pct × ceiling), so it is granted
+      // only for the months the annuity is actually paid and you are past
+      // exemptionFromAge — a mid-year start or a birthday mid-year gets a
+      // partial year of exemption. Credit points are likewise accrued per
+      // month, only for months with no salary (salary months already used
+      // them on the payslip). The annual brackets are applied to the
+      // year-to-date totals and the month's tax is the increment.
+      let pensionTaxM = 0, pensionTaxableM = 0;
       if (pensionGrossM > 0) {
         const useEx = pcfg.mode === "annuity" ? true : !lumpUsedExemption;
+        const eligible = useEx && exAge >= pcfg.exemptionFromAge;
+        const exemptM = eligible ? Math.min(pensionGrossM, (exemptionPctAt(year) / 100) * pcfg.ceiling * inflFactor) : 0;
+        pensionTaxableM = pensionGrossM - exemptM;
         Y.pensionGrossYTD += pensionGrossM;
-        const taxYTD = pensionTaxAnnual(Y.pensionGrossYTD, inflFactor, exAge, year, useEx);
+        Y.pensionTaxableYTD += pensionTaxableM;
+        if (salaryM <= 0) Y.pensionCreditYTD += creditPointsM * inflFactor;
+        const taxYTD = Math.max(0, incomeTaxAnnual(Y.pensionTaxableYTD, inflFactor) - Y.pensionCreditYTD);
         pensionTaxM = Math.max(0, taxYTD - Y.pensionTaxYTD);
         Y.pensionTaxYTD = taxYTD;
       }
       const pensionNetM = pensionGrossM - pensionTaxM;
 
       // Ordinary taxable income realized this month, for Section-102 stacking.
-      Y.ordStack += (working ? taxableSalaryAnnual(state, payroll) / 12 * Math.pow(1 + (state.income.salaryGrowthPct || 0) / 100, k) : 0)
-        + pensionTaxableAnnual(pensionGrossM * 12, inflFactor, exAge, year, pcfg.mode === "annuity" ? true : !lumpUsedExemption) / 12;
+      Y.ordStack += salaryTaxableM + pensionTaxableM;
 
       // 6) Cash flow for the month.
       const incomeM = salaryM + extraM + pensionNetM + oldAgeM + rentM;
@@ -901,6 +961,7 @@
       accs.forEach((a) => {
         const ret = opts && opts.returnOverride ? Math.max(-95, opts.returnOverride(a, k)) : a.ret;
         a.bal *= 1 + monthlyRate(ret);
+        if (a.indexBasis) a.basis *= 1 + inflM;       // CPI-indexed cost basis
         if ((a.kind === "pension" || a.kind === "study_fund") && a.feeBalance) {
           a.bal *= Math.pow(1 - a.feeBalance / 100, 1 / 12);
         }

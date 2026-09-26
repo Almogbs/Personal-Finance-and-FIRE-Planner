@@ -42,9 +42,11 @@ Israeli tax is defined on annual totals, so some things cannot be computed a mon
 
 - **Income-tax brackets, credit points and the NI/health ceilings.** Net salary is already a monthly
   payroll calculation, and it is applied monthly.
-- **The pension annuity's entitling-pension exemption** (Amendment 190) is one allowance per calendar
-  year. The engine accrues annuity gross **year-to-date**, recomputes the year's tax each month and
-  charges the increment, which keeps the allowance exact even when the annuity starts mid-year.
+- **Pension annuity tax** is settled on year-to-date totals: each month adds the annuity's taxable part
+  (gross minus that month's exemption) and, for months with no salary, one month of credit points; the
+  annual brackets are applied to the YTD taxable amount, credits are subtracted, and the month is charged
+  the increment. The entitling-pension exemption is a **monthly** allowance, so a year in which the
+  annuity starts, or in which you reach the exemption age, gets only the months that qualify.
 - **Section-102 ordinary income** from selling grant shares stacks on a year-to-date base (taxable
   salary + taxable pension + ordinary already realized that year), so a sale in March is priced below
   one in November — the brackets settle per calendar year even though the cash moves monthly.
@@ -136,7 +138,9 @@ goes to `income.defaultAccountId`. With no rules, the entire surplus goes to the
 
 ## Income
 
-- **Salary:** `monthlyNetSalary*12*(1+salaryGrowthPct/100)^k`. Zero after FIRE if `stopSalaryAtFire`.
+- **Salary:** gross mode recomputes the payslip each year from the grown gross (see *Salary &
+  payroll*); net mode grows the take-home: `monthlyNetSalary*(1+salaryGrowthPct/100)^k`. Zero after
+  FIRE if `stopSalaryAtFire`.
 - **Extra streams:** each `{monthlyAmount, startAge, endAge, growthPct}` contributes within its age window.
 - **Pension payout:** not modeled as a separate income line — instead the pension account becomes
   liquid at `pensionAccessAge` and is drawn down like any other pot. A separate **annuity estimate**
@@ -213,7 +217,8 @@ When `income.salaryMode === 'gross'`, net take-home and the pension/study-fund d
 from gross:
 
 ```
-incomeTax   = max(0, brackets(gross×12)/12 − creditPoints × creditPointValue)
+pensionCredit = 35% × min(empPension, 7% × min(pensionable, creditCeiling))   // section 45A
+incomeTax   = max(0, brackets(taxable×12)/12 − creditPoints × creditPointValue − pensionCredit)
 niHealth    = niReducedRate% × min(gross, threshold) + niFullRate% × clamp(gross−threshold, 0, ceiling−threshold)
 empPension  = pensionEmployeePct% × pensionable
 empKH       = khEmployeePct% × min(gross, khCeiling)
@@ -224,8 +229,12 @@ khDeposit      = (khEmployeePct + khEmployerPct)% × min(gross, khCeiling)
 ```
 
 The computed pension/study-fund deposits replace those accounts' manual contributions during the
-projection. Net take-home then grows by `salaryGrowthPct`. All rates are editable and are estimates
-(this is not payroll advice).
+projection. **Each projection year recomputes the payslip**: gross, extras and imputations grow by
+`salaryGrowthPct`, while brackets, the credit-point value, NI thresholds and every ₪ ceiling are indexed
+to inflation. A real raise is therefore taxed at the rising marginal rate (take-home grows slower than
+gross), while pure inflation leaves the real tax rate unchanged. Net mode can only grow the entered
+take-home. All rates are editable and are estimates (this is not payroll advice). The credit ceiling
+(`pensionCreditCeilingMonthly`, default ₪9,700/mo) is editable — check it against your payslip.
 
 ## RSU / equity grants
 
@@ -268,7 +277,7 @@ apprec    = max(0, gross − ordinary)         ← taxed at capGainsRate on sale
                      ? exemptionPct% × entitlingCeiling(inflated)
                      : 0            // an annuity drawn at 60 is fully taxable until 67
   taxableMonthly = max(0, grossMonthly − exemptMonthly)
-  tax            = incomeTaxAnnual(taxableMonthly × 12)   // scaled brackets
+  tax            = max(0, incomeTaxAnnual(taxableMonthly × 12) − creditPoints × creditPointValue × 12)
   netMonthly     = grossMonthly − tax
   ```
   The projection applies this year by year, so the same annuity nets less before age 67 and more from
@@ -285,6 +294,7 @@ apprec    = max(0, gross − ordinary)         ← taxed at capGainsRate on sale
   exemptCap   = age ≥ exemptionFromAge ? exemptionPct% × ceiling(inflated) × 180 : 0
   tax         = incomeTaxAnnual(max(0, lumpGross − exemptCap))
   ```
+  Credit points are applied to the annuity, not to the lump sum (one set of credits per year).
   The net lump lands in the default liquid account; the forced minimum annuity pays out monthly like
   a regular annuity (with no further exemption if the lump consumed the exempt capital).
 
@@ -364,13 +374,20 @@ grossSale = netNeeded / (1 − effRate)
 tax       = grossSale − netNeeded
 ```
 
+Israel taxes the **real** gain: for shekel-denominated accounts the cost basis is **indexed to CPI every
+month**, so only growth above inflation is taxed. Foreign-currency (USD) accounts keep a nominal basis,
+because their inflationary amount follows the exchange rate, which the model holds constant. When the
+indexed basis exceeds the value (a real loss) the sale is tax-free, and basis always leaves pro-rata with
+the units sold. The dashboard "today" figure uses the basis you entered, unindexed.
+
 Cost basis is tracked per account (deposits raise basis; growth is unrealized). For taxable holdings the
 basis can be entered directly or derived from the **gain vs buy value %** (`gainPct`) on the Accounts
 page, so capital-gains tax applies to the gains only. Each row records the net withdrawn, the tax, and
 the **source account/group** of the withdrawal.
 
-Income-tax brackets used (annual, nominal ₪, ~2026, thresholds scaled by inflation in future years):
-10% / 14% / 20% / 31% / 35% / 47% / 50%.
+Income-tax brackets used (annual, nominal ₪, 2026 — including the 2026 budget's wider 20%/31% bands —
+thresholds scaled by inflation in future years): 10% to ₪84,120 · 14% to ₪120,720 · 20% to ₪228,000 ·
+31% to ₪301,200 · 35% to ₪560,280 · 47% to ₪721,560 · 50% above.
 
 ## FIRE targets
 

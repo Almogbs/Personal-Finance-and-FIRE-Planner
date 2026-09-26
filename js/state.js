@@ -166,6 +166,11 @@
           khEmployeePct: 2.5,
           khEmployerPct: 7.5,
           khCeilingMonthly: 0,
+          // Section 45A credit on the employee's own pension deposit: 35% of
+          // the deposit, counted up to 7% of salary capped at the ceiling.
+          pensionCreditPct: 35,
+          pensionCreditMaxRatePct: 7,
+          pensionCreditCeilingMonthly: 9700,
         },
       },
 

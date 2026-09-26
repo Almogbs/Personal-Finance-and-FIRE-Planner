@@ -196,3 +196,127 @@ test("a same-year deficit pulls back that year's surplus before selling", () => 
   near(row.withdrawalNet, Math.max(0, deficit - surplus), 1e-3);
   assert.ok(row.withdrawalNet < deficit);
 });
+
+/* ---- Tax-rule tests ---------------------------------------------------- */
+
+// Gross-mode payslip with every deduction but income tax switched off.
+function payStateFor(gross, mutate) {
+  return bareState((s) => {
+    s.income.salaryMode = "gross";
+    s.income.grossMonthly = gross;
+    s.income.taxableExtrasMonthly = 0;
+    s.income.taxableImputationsMonthly = 0;
+    s.income.creditPoints = 0;
+    Object.assign(s.assumptions.payroll, {
+      niReducedRate: 0, niFullRate: 0, pensionEmployeePct: 0, pensionEmployerPct: 0,
+      severancePct: 0, khEmployeePct: 0, khEmployerPct: 0, pensionCeilingMonthly: 0, khCeilingMonthly: 0,
+    });
+    if (mutate) mutate(s);
+  });
+}
+
+test("2026 income-tax brackets (20% to ₪228,000, 31% to ₪301,200, 35% to ₪560,280)", () => {
+  // Annual tax at the top of each band, from the 2026 thresholds.
+  const cases = [
+    [228000 / 12, 8412 + 36600 * 0.14 + 107280 * 0.20],
+    [301200 / 12, 8412 + 36600 * 0.14 + 107280 * 0.20 + 73200 * 0.31],
+    [560280 / 12, 8412 + 36600 * 0.14 + 107280 * 0.20 + 73200 * 0.31 + 259080 * 0.35],
+  ];
+  for (const [gross, annual] of cases) {
+    const pay = E.computePayroll(payStateFor(gross));
+    near(pay.incomeTax, annual / 12, 0.01, "gross " + gross);
+  }
+  // Published effect of the 2026 widening: ≈ ₪420/mo saved above ₪25,100.
+  const oldTax = (x) => { let t = 0, p = 0; for (const [th, r] of [[84120, .1], [120720, .14], [193800, .2], [269280, .31], [558960, .35], [721560, .47], [Infinity, .5]]) { const sp = Math.min(x, th) - p; if (sp > 0) t += sp * r; if (x <= th) break; p = th; } return t; };
+  near(oldTax(30000 * 12) / 12 - E.computePayroll(payStateFor(30000)).incomeTax, 420, 1);
+});
+
+test("35% credit on the employee pension deposit (up to 7% of salary, capped)", () => {
+  const s1 = payStateFor(10000, (s) => { s.assumptions.payroll.pensionEmployeePct = 6; });
+  near(E.computePayroll(s1).pensionCredit, 0.35 * 600, 1e-6);            // 6% < 7% of 9,700
+  const s2 = payStateFor(40000, (s) => { s.assumptions.payroll.pensionEmployeePct = 7; });
+  near(E.computePayroll(s2).pensionCredit, 0.35 * 0.07 * 9700, 1e-6);     // capped at the ceiling
+  const base = E.computePayroll(payStateFor(40000));
+  const withCredit = E.computePayroll(s2);
+  near(withCredit.incomeTax, base.incomeTax - withCredit.pensionCredit, 1e-6);
+});
+
+test("salary growth is taxed progressively in gross mode", () => {
+  const st = payStateFor(30000, (s) => { s.assumptions.inflation = 0; s.income.salaryGrowthPct = 5; });
+  const p0 = E.computePayroll(st), p10 = E.computePayroll(st, { growth: Math.pow(1.05, 10), factor: 1 });
+  assert.ok(p10.net / p0.net < Math.pow(1.05, 10) - 1e-6, "take-home grows slower than gross");
+  // Pure inflation does not raise the real tax rate.
+  const pInf = E.computePayroll(st, { growth: 1.3, factor: 1.3 });
+  near(pInf.incomeTax / 1.3, p0.incomeTax, 1e-6);
+  // The projection uses the grown payslip.
+  const p = E.project(st);
+  const r = p.rows[5];
+  const m = p.monthly.find((x) => x.year === r.year);
+  near(m.salary, E.computePayroll(st, { growth: Math.pow(1.05, r.k), factor: 1 }).net, 1e-6);
+});
+
+// A retiree drawing a 20,000/mo annuity (pot = 220 × 20,000), no inflation.
+function pensionState(age, mutate) {
+  return bareState((s) => {
+    s.profile.birthDate = "";
+    s.profile.currentAge = age;
+    s.profile.fireAge = 40;
+    s.profile.pensionAccessAge = 60;
+    s.assumptions.inflation = 0;
+    s.assumptions.pensionMode = "annuity";
+    s.assumptions.pensionAnnuityCoefficient = 220;
+    s.assumptions.pensionExemptionAuto = false;
+    s.assumptions.pensionExemptionPct = 57.5;
+    s.assumptions.pensionEntitlingCeiling = 9430;
+    s.assumptions.pensionExemptionFromAge = 67;
+    s.assumptions.pensionCpiLinked = false;
+    s.income.creditPoints = 2.25;
+    s.assumptions.payroll.creditPointValue = 242;
+    s.accounts = [acct("pension", 220 * 20000), acct("cash", 0)];
+    s.income.defaultAccountId = s.accounts[1].id;
+    if (mutate) mutate(s);
+  });
+}
+const tax26 = (x) => { let t = 0, p = 0; for (const [th, r] of [[84120, .1], [120720, .14], [228000, .2], [301200, .31], [560280, .35], [721560, .47], [Infinity, .5]]) { const sp = Math.min(x, th) - p; if (sp > 0) t += sp * r; if (x <= th) break; p = th; } return t; };
+
+test("pension tax applies credit points in retirement", () => {
+  const p = E.project(pensionState(70));
+  const r = p.rows[1]; // a full calendar year
+  const taxable = (20000 - 0.575 * 9430) * 12;
+  near(r.pensionTax, tax26(taxable) - 2.25 * 242 * 12, 0.5);
+  near(p.pension.taxMonthly, (tax26(taxable) - 2.25 * 242 * 12) / 12, 0.05);
+});
+
+test("pension exemption is monthly: only months past the exemption age get it", () => {
+  const p = E.project(pensionState(66.5));
+  const row = p.rows.find((r) => {
+    const ms = p.monthly.filter((m) => m.year === r.year);
+    return ms.length === 12 && ms.some((m) => m.exactAge < 67) && ms.some((m) => m.exactAge >= 67);
+  });
+  assert.ok(row, "a full year that crosses age 67");
+  const ms = p.monthly.filter((m) => m.year === row.year);
+  const taxable = ms.reduce((t, m) => t + 20000 - (m.exactAge >= 67 ? 0.575 * 9430 : 0), 0);
+  near(row.pensionTax, Math.max(0, tax26(taxable) - 2.25 * 242 * 12), 0.5);
+});
+
+test("capital gains: shekel assets are taxed on the real gain, USD on the nominal", () => {
+  const mk = (currency) => bareState((s) => {
+    s.assumptions.inflation = 3;
+    s.accounts = [acct("taxable", 100000, { currency, expectedReturn: 3, capGainsRate: 25 })];
+  });
+  const rIls = E.project(mk("ILS")).rows[8];
+  const rUsd = E.project(mk("USD")).rows[8];
+  near(rIls.liquidTax, 0, 1);                           // growth = inflation → no real gain
+  assert.ok(rUsd.liquidTax > 1000, "USD basis stays nominal (constant FX)");
+  // With 7% growth vs 3% inflation, tax is on the gain above the indexed basis.
+  const st = bareState((s) => {
+    s.assumptions.inflation = 3;
+    s.accounts = [acct("taxable", 100000, { expectedReturn: 7, capGainsRate: 25 })];
+  });
+  const p = E.project(st);
+  const r = p.rows[p.rows.length - 1];
+  const months = p.monthly.length;
+  const bal = r.perAccount[st.accounts[0].id];
+  const indexedBasis = 100000 * Math.pow(1.03, months / 12);
+  near(r.liquidTax, (bal - indexedBasis) * 0.25, 1);
+});

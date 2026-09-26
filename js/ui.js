@@ -515,8 +515,11 @@
           ctl("Keren Hishtalmut employee %", "assumptions.payroll.khEmployeePct", { min: 0, max: 5, step: 0.1, suffix: "%" }) +
           ctl("Keren Hishtalmut employer %", "assumptions.payroll.khEmployerPct", { min: 0, max: 10, step: 0.1, suffix: "%" }) +
           ctl("Keren Hishtalmut ceiling ₪/mo (0 = none)", "assumptions.payroll.khCeilingMonthly", { min: 0, max: 60000, step: 10 }) +
+          ctl("Pension tax credit %", "assumptions.payroll.pensionCreditPct", { min: 0, max: 50, step: 1, suffix: "%" }) +
+          ctl("…on deposits up to % of salary", "assumptions.payroll.pensionCreditMaxRatePct", { min: 0, max: 12, step: 0.5, suffix: "%" }) +
+          ctl("…salary ceiling for the credit ₪/mo (0 = none)", "assumptions.payroll.pensionCreditCeilingMonthly", { min: 0, max: 60000, step: 100 }) +
           "</div></div>" +
-          '<p class="hint">Used when salary is entered as <b>gross</b> on the Income page. 2026 references: credit point ≈ ₪242/mo; employee NI+health <b>4.27%</b> up to ₪7,703/mo then <b>12.17%</b> up to the ₪51,910/mo insurable ceiling; pension 6% + 6.5% + severance 6% (mandatory minimum — 8.33% severance is common in tech); Keren Hishtalmut 2.5% + 7.5% (tax-exempt salary ceiling ₪15,712/mo). Note: a <b>comprehensive</b> pension fund (קרן פנסיה מקיפה) only accepts deposits up to ₪5,645/mo (20.5% × twice the average wage ≈ salary of ₪27,538/mo) — set the pension ceiling to ₪27,538 if your employer doesn\'t route the excess to a complementary fund. Verify with your payslip.</p>' +
+          '<p class="hint">Used when salary is entered as <b>gross</b> on the Income page. 2026 references: credit point ≈ ₪242/mo; employee NI+health <b>4.27%</b> up to ₪7,703/mo then <b>12.17%</b> up to the ₪51,910/mo insurable ceiling; pension 6% + 6.5% + severance 6% (mandatory minimum — 8.33% severance is common in tech); Keren Hishtalmut 2.5% + 7.5% (tax-exempt salary ceiling ₪15,712/mo); your own pension deposit earns a 35% tax credit on up to 7% of salary, capped at the insured-salary ceiling (≈ ₪9,700/mo). Projection years recompute this payslip from the grown gross salary, with brackets, credits and NI thresholds indexed to inflation. Note: a <b>comprehensive</b> pension fund (קרן פנסיה מקיפה) only accepts deposits up to ₪5,645/mo (20.5% × twice the average wage ≈ salary of ₪27,538/mo) — set the pension ceiling to ₪27,538 if your employer doesn\'t route the excess to a complementary fund. Verify with your payslip.</p>' +
         "</div>" +
         wdHtml;
       this.update(el);
@@ -740,6 +743,7 @@
             "</div>" +
             '<div class="pay-block"><div class="pay-title">Deductions</div>' +
               row("Income tax", "−" + money(pay.incomeTax)) +
+              row("↳ incl. pension-deposit credit", money(pay.pensionCredit)) +
               row("National insurance + health", "−" + money(pay.niHealth)) +
               row("Pension (you)", "−" + money(pay.empPension)) +
               row("Keren Hishtalmut (you)", "−" + money(pay.empKH)) +
